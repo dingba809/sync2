@@ -62,6 +62,8 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
 
   app.delete('/api/accounts/:id', async (req) => {
     const { id } = req.params as any;
+    const tasks = db.prepare(`SELECT id FROM tasks WHERE account_id = ?`).all(id) as any[];
+    for (const t of tasks) scheduler.unregister(t.id);
     deleteAccount(db, id);
     return { ok: true };
   });
@@ -131,6 +133,8 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     req.raw.on('close', () => clearInterval(timer));
   });
 
+  const running = new Set<string>();
+
   function reschedule(taskId: string): void {
     const t = db.prepare(`SELECT id, schedule, enabled FROM tasks WHERE id = ?`).get(taskId) as any;
     if (!t) return;
@@ -138,39 +142,45 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   }
 
   async function runTaskById(taskId: string): Promise<void> {
-    const t = db.prepare(
-      `SELECT id, account_id AS accountId, local_path AS localPath, remote_path AS remotePath FROM tasks WHERE id = ?`
-    ).get(taskId) as any;
-    if (!t) return;
-    const acc = db.prepare(`SELECT provider, credential FROM accounts WHERE id = ?`).get(t.accountId) as any;
-    if (!acc) { insertLog(db, taskId, 'error', '账号不存在'); return; }
-    const runId = insertRun(db, taskId);
+    if (running.has(taskId)) return;
+    running.add(taskId);
     try {
-      const cred = decodeCred(acc.credential);
-      const provider = createProvider(acc.provider, cred, cfg);
-      const quota = await provider.getQuota().catch(() => null);
-      if (quota && quota.total > 0 && quota.used >= quota.total) {
-        insertLog(db, taskId, 'error', '网盘容量已满，中止同步');
-        finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
+      const t = db.prepare(
+        `SELECT id, account_id AS accountId, local_path AS localPath, remote_path AS remotePath FROM tasks WHERE id = ?`
+      ).get(taskId) as any;
+      if (!t) return;
+      const acc = db.prepare(`SELECT provider, credential FROM accounts WHERE id = ?`).get(t.accountId) as any;
+      if (!acc) { insertLog(db, taskId, 'error', '账号不存在'); return; }
+      const runId = insertRun(db, taskId);
+      try {
+        const cred = decodeCred(acc.credential);
+        const provider = createProvider(acc.provider, cred, cfg);
+        const quota = await provider.getQuota().catch(() => null);
+        if (quota && quota.total > 0 && quota.used >= quota.total) {
+          insertLog(db, taskId, 'error', '网盘容量已满，中止同步');
+          finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
+          updateTask(db, taskId, { lastStatus: 'failed' });
+          return;
+        }
+        const snapshots = {
+          list: (tid: string) => listSnapshots(db, tid),
+          upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
+          remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
+        };
+        const result = await runSync({
+          taskId, localPath: t.localPath, remotePath: t.remotePath, provider, snapshots,
+          onLog: (level, msg) => insertLog(db, taskId, level, msg)
+        });
+        finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
+        updateTask(db, taskId, { lastStatus: result.error ? 'failed' : 'success' });
+      } catch (e) {
+        const msg = (e as Error).message;
+        insertLog(db, taskId, 'error', `同步异常: ${msg}`);
+        finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
         updateTask(db, taskId, { lastStatus: 'failed' });
-        return;
       }
-      const snapshots = {
-        list: (tid: string) => listSnapshots(db, tid),
-        upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
-        remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
-      };
-      const result = await runSync({
-        taskId, localPath: t.localPath, remotePath: t.remotePath, provider, snapshots,
-        onLog: (level, msg) => insertLog(db, taskId, level, msg)
-      });
-      finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
-      updateTask(db, taskId, { lastStatus: result.error ? 'failed' : 'success' });
-    } catch (e) {
-      const msg = (e as Error).message;
-      insertLog(db, taskId, 'error', `同步异常: ${msg}`);
-      finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
-      updateTask(db, taskId, { lastStatus: 'failed' });
+    } finally {
+      running.delete(taskId);
     }
   }
 

@@ -21,6 +21,6 @@ app.setNotFoundHandler((req, reply) => {
 });
 
 const port = cfg.port;
-app.listen({ port, host: '0.0.0.0' }).then(() => {
+app.listen({ port, host: cfg.host }).then(() => {
   console.log(`sync2 listening on http://localhost:${port}`);
 });
