@@ -1,6 +1,6 @@
 import type { DriveProvider, RemoteEntry, Quota } from '../../shared/types.js';
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { createReadStream, statSync } from 'node:fs';
 
 const BASE = 'https://drive-pc.quark.cn/1/clouddrive';
 const OSS_UA = 'aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit';
@@ -79,8 +79,9 @@ export class QuarkProvider implements DriveProvider {
 
   async uploadFile(localPath: string, parentId: string, name: string): Promise<RemoteEntry> {
     const size = statSync(localPath).size;
-    const md5 = await md5File(localPath);
     const mimeType = 'application/octet-stream';
+
+    const { md5, sha1 } = await hashFile(localPath);
 
     const pre = await this.post(`${BASE}/file/upload/pre`, {
       ccp_hash_update: true, parallel_upload: true, pdir_fid: parentId,
@@ -90,21 +91,20 @@ export class QuarkProvider implements DriveProvider {
     });
 
     const hashRes = await this.post(`${BASE}/file/update/hash`, {
-      task_id: pre.task_id, md5, sha1: ''
+      task_id: pre.task_id, md5, sha1
     });
     if (hashRes?.finish === true) {
       return await this.findByName(parentId, name, size, md5);
     }
 
     const partSize: number = pre.metadata?.part_size || 4 * 1024 * 1024;
-    const buf = readFileSync(localPath);
     const host = String(pre.upload_url || '').replace(/^https?:\/\//, '');
     const baseUrl = `https://${pre.bucket}.${host}/${pre.obj_key}`;
     const etags: string[] = [];
     let partNumber = 1;
-    for (let off = 0; off < size; off += partSize) {
-      const chunk = buf.subarray(off, Math.min(off + partSize, size));
-      etags.push(await this.upPart(pre, mimeType, partNumber, chunk, baseUrl));
+    const stream = createReadStream(localPath, { highWaterMark: partSize });
+    for await (const chunk of stream) {
+      etags.push(await this.upPart(pre, mimeType, partNumber, chunk as Buffer<ArrayBuffer>, baseUrl));
       partNumber++;
     }
 
@@ -197,8 +197,13 @@ export class QuarkProvider implements DriveProvider {
   }
 }
 
-async function md5File(path: string): Promise<string> {
-  const { readFile } = await import('node:fs/promises');
-  const buf = await readFile(path);
-  return createHash('md5').update(buf).digest('hex');
+async function hashFile(path: string): Promise<{ md5: string; sha1: string }> {
+  const md5 = createHash('md5');
+  const sha1 = createHash('sha1');
+  const stream = createReadStream(path);
+  for await (const chunk of stream) {
+    md5.update(chunk as Buffer);
+    sha1.update(chunk as Buffer);
+  }
+  return { md5: md5.digest('hex'), sha1: sha1.digest('hex') };
 }
