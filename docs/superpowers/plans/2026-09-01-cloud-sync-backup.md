@@ -872,7 +872,7 @@ import { planSync, LocalFileInfo, SnapshotEntry, RemoteRef } from './planner.js'
 const lf = (size: number, mtime: number): LocalFileInfo => ({ size, mtime });
 const snap = (size: number, mtime: number, hash: string | null, remoteId: string): SnapshotEntry =>
   ({ size, mtime, hash, remoteId });
-const remote = (size: number, hash?: string): RemoteRef => ({ size, hash });
+const remote = (size: number, hash?: string, id = 'rid'): RemoteRef => ({ id, size, hash });
 
 describe('planSync', () => {
   it('uploads new local file (no snapshot, no remote)', () => {
@@ -932,9 +932,9 @@ describe('planSync', () => {
     const p = planSync(
       new Map(),
       new Map(),
-      new Map([['a.txt', remote(5, 'h')]])
+      new Map([['a.txt', remote(5, 'h', 'remote-id')]])
     );
-    expect(p.toDelete).toEqual([{ relPath: 'a.txt', remoteId: 'a.txt' }]);
+    expect(p.toDelete).toEqual([{ relPath: 'a.txt', remoteId: 'remote-id' }]);
   });
 
   it('uploads local file that exists remotely but has no snapshot (conservative)', () => {
@@ -969,6 +969,7 @@ export interface SnapshotEntry {
 }
 
 export interface RemoteRef {
+  id: string;
   size: number;
   hash?: string;
 }
@@ -1006,7 +1007,7 @@ export function planSync(
 
   for (const [relPath, remote] of remoteEntries) {
     if (!localFiles.has(relPath) && !snapshots.has(relPath)) {
-      toDelete.push({ relPath, remoteId: relPath });
+      toDelete.push({ relPath, remoteId: remote.id });
     }
   }
 
@@ -1040,7 +1041,6 @@ git commit -m "feat: add sync planner with three-way diff"
 import type { DriveProvider, RemoteEntry, Quota } from '../../shared/types.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { basename } from 'node:path';
 
 const API = 'https://www.googleapis.com';
 
@@ -1129,7 +1129,7 @@ export class GoogleDriveProvider implements DriveProvider {
     const uploaded = await res.json() as any;
 
     const metaRes = await fetch(
-      `${API}/drive/v3/files/${uploaded.id}?addParents=${parentId}&fields=id,name,size,modifiedTime,md5Checksum`,
+      `${API}/drive/v3/files/${uploaded.id}?addParents=${parentId}&removeParents=root&fields=id,name,size,modifiedTime,md5Checksum`,
       { method: 'PATCH', headers }
     );
     if (!metaRes.ok) throw new Error(`Google move failed: ${metaRes.status} ${await metaRes.text()}`);
@@ -1240,7 +1240,6 @@ git commit -m "feat: add Google Drive provider"
 import type { DriveProvider, RemoteEntry, Quota } from '../../shared/types.js';
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { basename } from 'node:path';
 
 const BASE = 'https://drive-pc.quark.cn/1/clouddrive';
 
@@ -1717,10 +1716,10 @@ export async function runSync(opts: {
 
   const rootId = await resolveRemoteRoot(provider, remotePath);
   const remoteEntries = await listRemoteRecursive(provider, rootId);
-  const remoteRefs = new Map<string, { size: number; hash?: string }>();
+  const remoteRefs = new Map<string, { id: string; size: number; hash?: string }>();
   const remoteById = new Map<string, RemoteEntry>();
   for (const [rel, e] of remoteEntries) {
-    remoteRefs.set(rel, { size: e.size, hash: e.hash });
+    remoteRefs.set(rel, { id: e.id, size: e.size, hash: e.hash });
     remoteById.set(e.id, e);
   }
 
@@ -1751,11 +1750,15 @@ export async function runSync(opts: {
       const local = localFiles.get(relPath)!;
       const parentId = await parentFor(relPath);
       const name = posix.basename(relPath);
+      const oldSnapshot = snapshotMap.get(relPath);
       const entry = await withRetry(() => provider.uploadFile(join(localPath, relPath), parentId, name));
       const hash = localMd5(join(localPath, relPath));
       snapshots.upsert(taskId, relPath, {
         size: local.size, mtime: local.mtime, hash, remoteId: entry.id
       });
+      if (oldSnapshot && oldSnapshot.remoteId && oldSnapshot.remoteId !== entry.id) {
+        await withRetry(() => provider.deleteEntry(oldSnapshot.remoteId));
+      }
       uploadedCount++;
       onLog('info', `上传 ${relPath}`);
     } catch (e) {
