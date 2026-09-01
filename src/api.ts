@@ -1,7 +1,15 @@
 import type { TaskRecord } from '../shared/types.js';
 
 async function j<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = text || `HTTP ${res.status}`;
+    try {
+      const data = JSON.parse(text);
+      if (data?.error) msg = data.error;
+    } catch {}
+    throw new Error(msg);
+  }
   return res.json() as Promise<T>;
 }
 

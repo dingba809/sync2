@@ -68,7 +68,10 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     return { ok: true };
   });
 
-  app.get('/api/auth/google/url', async () => {
+  app.get('/api/auth/google/url', async (req, reply) => {
+    if (!cfg.googleClientId || !cfg.googleClientSecret) {
+      return reply.code(400).send({ error: 'Google OAuth 未配置，请设置 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET 环境变量后重启' });
+    }
     const state = 'sync2';
     return { url: googleAuthUrl(cfg, state) };
   });

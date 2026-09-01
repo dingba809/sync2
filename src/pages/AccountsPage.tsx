@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Button, Table, Space, Popconfirm } from 'antd';
+import { Card, Button, Table, Space, Popconfirm, message } from 'antd';
 import { GoogleOutlined, PlusOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import QuarkLoginModal from '../components/QuarkLoginModal';
@@ -13,8 +13,12 @@ export default function AccountsPage() {
   useEffect(() => { load(); }, []);
 
   const addGoogle = async () => {
-    const { url } = await api.googleAuthUrl();
-    window.location.href = url;
+    try {
+      const { url } = await api.googleAuthUrl();
+      window.location.href = url;
+    } catch (e: any) {
+      message.error(e.message || 'Google OAuth 未配置');
+    }
   };
 
   const columns = [
