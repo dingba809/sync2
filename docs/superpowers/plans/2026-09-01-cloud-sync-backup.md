@@ -1749,8 +1749,6 @@ git commit -m "feat: add Quark QR-code login flow"
 import type { DriveProvider, RemoteEntry } from '../../shared/types.js';
 import { scanDirectory } from './scanner.js';
 import { planSync } from './planner.js';
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 
 export interface SnapshotStore {
@@ -1814,9 +1812,8 @@ export async function runSync(opts: {
       const name = posix.basename(relPath);
       const oldSnapshot = snapshotMap.get(relPath);
       const entry = await withRetry(() => provider.uploadFile(join(localPath, relPath), parentId, name));
-      const hash = localMd5(join(localPath, relPath));
       snapshots.upsert(taskId, relPath, {
-        size: local.size, mtime: local.mtime, hash, remoteId: entry.id
+        size: local.size, mtime: local.mtime, hash: entry.hash ?? null, remoteId: entry.id
       });
       if (oldSnapshot && oldSnapshot.remoteId && oldSnapshot.remoteId !== entry.id) {
         await withRetry(() => provider.deleteEntry(oldSnapshot.remoteId));
@@ -1855,10 +1852,6 @@ async function withRetry<T>(fn: () => Promise<T>, times = 3): Promise<T> {
     }
   }
   throw lastErr!;
-}
-
-function localMd5(path: string): string {
-  return createHash('md5').update(readFileSync(path)).digest('hex');
 }
 
 async function resolveRemoteRoot(provider: DriveProvider, remotePath: string): Promise<string> {
