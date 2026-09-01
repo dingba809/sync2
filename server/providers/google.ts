@@ -84,7 +84,7 @@ export class GoogleDriveProvider implements DriveProvider {
       Buffer.from(`\r\n--${boundary}--\r\n`)
     ]);
 
-    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=multipart`, {
+    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,modifiedTime,md5Checksum`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` },
       body: multipart
