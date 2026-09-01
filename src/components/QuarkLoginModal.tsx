@@ -11,18 +11,32 @@ export default function QuarkLoginModal({ open, onClose, onDone }: {
 
   useEffect(() => {
     if (!open) return;
-    let stop = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
     (async () => {
       const r = await api.quarkStart();
+      if (cancelled) return;
       setUrl(r.url);
-      const timer = setInterval(async () => {
+      setTip('请使用夸克 App 扫码');
+      timer = setInterval(async () => {
         const s = await api.quarkPoll(r.token);
-        if (s.state === 'success') { clearInterval(timer); onDone(); }
-        else if (s.state === 'scanned') setTip('已扫码，请在手机上确认');
+        if (s.state === 'success') {
+          if (timer) clearInterval(timer);
+          onDone();
+        } else if (s.state === 'scanned') {
+          setTip('已扫码，请在手机上确认');
+        } else if (s.state === 'expired') {
+          if (timer) clearInterval(timer);
+          setTip('二维码已过期，请关闭后重试');
+        }
       }, 1500);
-      if (stop) clearInterval(timer);
     })();
-    return () => { stop = true; };
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
   }, [open]);
 
   return (

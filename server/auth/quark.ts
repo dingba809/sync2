@@ -31,6 +31,9 @@ export async function pollQrcode(token: string): Promise<QrcodeStatus> {
     return { state: 'success', serviceTicket: data.data.members.service_ticket };
   }
   if (data.status === 50004001) return { state: 'pending' };
+  if (data.status === 50004002 || data.status === 50004003 || data.status === 50004004) {
+    return { state: 'expired' };
+  }
   return { state: 'scanned' };
 }
 
