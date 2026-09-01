@@ -1124,7 +1124,7 @@ export class GoogleDriveProvider implements DriveProvider {
       Buffer.from(`\r\n--${boundary}--\r\n`)
     ]);
 
-    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=multipart`, {
+    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,modifiedTime,md5Checksum`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` },
       body: multipart
@@ -1170,6 +1170,9 @@ export async function md5File(path: string): Promise<string> {
 ```ts
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { GoogleDriveProvider } from './google.js';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function mockAuth(token = 'tok'): any {
   return { getAccessToken: vi.fn().mockResolvedValue(token) };
@@ -1207,6 +1210,24 @@ describe('GoogleDriveProvider', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'newid' }), { status: 200 }));
     const p = new GoogleDriveProvider(mockAuth());
     expect(await p.ensureFolder('parent', 'sub')).toBe('newid');
+  });
+
+  it('uploadFile returns entry with name and hash', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gup-'));
+    const filePath = join(dir, 'a.txt');
+    writeFileSync(filePath, 'hello');
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ files: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'nid', name: 'a.txt', size: '5', modifiedTime: '2024-01-01T00:00:00.000Z', md5Checksum: 'abc'
+      }), { status: 200 }));
+    const p = new GoogleDriveProvider(mockAuth());
+    const entry = await p.uploadFile(filePath, 'parent', 'a.txt');
+    expect(entry.name).toBe('a.txt');
+    expect(entry.hash).toBe('abc');
+    expect(entry.isDir).toBe(false);
+    expect(entry.mtime).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 ```
