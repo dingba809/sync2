@@ -1781,10 +1781,8 @@ export async function runSync(opts: {
   const rootId = await resolveRemoteRoot(provider, remotePath);
   const remoteEntries = await listRemoteRecursive(provider, rootId);
   const remoteRefs = new Map<string, { id: string; size: number; hash?: string }>();
-  const remoteById = new Map<string, RemoteEntry>();
   for (const [rel, e] of remoteEntries) {
     remoteRefs.set(rel, { id: e.id, size: e.size, hash: e.hash });
-    remoteById.set(e.id, e);
   }
 
   const plan = planSync(localFiles, snapshotMap, remoteRefs);
