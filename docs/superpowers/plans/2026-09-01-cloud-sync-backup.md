@@ -1651,7 +1651,14 @@ export async function getQrcodeToken(): Promise<{ token: string; url: string }> 
   const data = await res.json() as any;
   if (data.status !== 2000000) throw new Error(`Quark qrcode status ${data.status}`);
   const token = data.data.members.token;
-  return { token, url: `https://pan.quark.cn/cas/qrcode?token=${token}` };
+  const qrParams = new URLSearchParams({
+    token,
+    client_id: '532',
+    ssb: 'weblogin',
+    uc_param_str: '',
+    uc_biz_str: 'S:custom|OPT:SAREA@0|OPT:IMMERSIVE@1|OPT:BACK_BTN_STYLE@0'
+  });
+  return { token, url: `https://su.quark.cn/4_eMHBJ?${qrParams}` };
 }
 
 export interface QrcodeStatus {
