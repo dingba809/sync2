@@ -1,6 +1,6 @@
 import type { DriveProvider, RemoteEntry, Quota } from '../../shared/types.js';
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { createReadStream, statSync } from 'node:fs';
 
 const API = 'https://www.googleapis.com';
 
@@ -75,29 +75,70 @@ export class GoogleDriveProvider implements DriveProvider {
     if (dup) return dup;
 
     const headers = await this.headers();
-    const body = readFileSync(localPath);
-    const boundary = 'sync2-' + Math.random().toString(36).slice(2);
     const metadata = JSON.stringify({ name, parents: [parentId] });
-    const multipart = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`),
-      body,
-      Buffer.from(`\r\n--${boundary}--\r\n`)
-    ]);
 
-    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,modifiedTime,md5Checksum`, {
+    if (size === 0) {
+      const res = await fetch(`${API}/drive/v3/files?fields=id,name,size,modifiedTime,md5Checksum`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: metadata
+      });
+      if (!res.ok) throw new Error(`Google create failed: ${res.status} ${await res.text()}`);
+      const meta = await res.json() as any;
+      return {
+        id: meta.id, name: meta.name, isDir: false, size: 0,
+        mtime: Math.floor(new Date(meta.modifiedTime).getTime() / 1000), hash: meta.md5Checksum
+      };
+    }
+
+    const initRes = await fetch(`${API}/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,modifiedTime,md5Checksum`, {
       method: 'POST',
-      headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` },
-      body: multipart
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+        'X-Upload-Content-Type': 'application/octet-stream',
+        'X-Upload-Content-Length': String(size)
+      },
+      body: metadata
     });
-    if (!res.ok) throw new Error(`Google upload failed: ${res.status} ${await res.text()}`);
-    const meta = await res.json() as any;
+    if (initRes.status !== 200) throw new Error(`Google resumable init failed: ${initRes.status} ${await initRes.text()}`);
+    const sessionUri = initRes.headers.get('location');
+    if (!sessionUri) throw new Error('Google resumable init missing location');
+
+    const CHUNK = 5 * 1024 * 1024;
+    const stream = createReadStream(localPath, { highWaterMark: CHUNK });
+    let start = 0;
+    let fileMeta: any = null;
+    for await (const chunk of stream) {
+      const buf = chunk as Buffer<ArrayBuffer>;
+      const end = start + buf.length - 1;
+      const res = await fetch(sessionUri, {
+        method: 'PUT',
+        headers: {
+          'Content-Length': String(buf.length),
+          'Content-Range': `bytes ${start}-${end}/${size}`
+        },
+        body: buf
+      });
+      if (res.status === 200 || res.status === 201) {
+        fileMeta = await res.json();
+        break;
+      } else if (res.status === 308) {
+        start = end + 1;
+      } else {
+        throw new Error(`Google resumable upload failed: ${res.status} ${await res.text()}`);
+      }
+    }
+
+    if (!fileMeta) throw new Error('Google resumable upload incomplete');
+
     return {
-      id: meta.id,
-      name: meta.name,
+      id: fileMeta.id,
+      name: fileMeta.name,
       isDir: false,
-      size: Number(meta.size ?? size),
-      mtime: Math.floor(new Date(meta.modifiedTime).getTime() / 1000),
-      hash: meta.md5Checksum
+      size: Number(fileMeta.size ?? size),
+      mtime: Math.floor(new Date(fileMeta.modifiedTime).getTime() / 1000),
+      hash: fileMeta.md5Checksum
     };
   }
 
@@ -119,7 +160,8 @@ export class GoogleDriveProvider implements DriveProvider {
 }
 
 export async function md5File(path: string): Promise<string> {
-  const { readFile } = await import('node:fs/promises');
-  const buf = await readFile(path);
-  return createHash('md5').update(buf).digest('hex');
+  const hash = createHash('md5');
+  const stream = createReadStream(path);
+  for await (const chunk of stream) hash.update(chunk as Buffer);
+  return hash.digest('hex');
 }

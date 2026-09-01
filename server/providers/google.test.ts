@@ -48,6 +48,7 @@ describe('GoogleDriveProvider', () => {
     writeFileSync(filePath, 'hello');
     vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(JSON.stringify({ files: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { location: 'https://example.com/session' } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         id: 'nid', name: 'a.txt', size: '5', modifiedTime: '2024-01-01T00:00:00.000Z', md5Checksum: 'abc'
       }), { status: 200 }));
