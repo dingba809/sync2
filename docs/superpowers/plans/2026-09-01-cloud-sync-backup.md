@@ -1668,6 +1668,9 @@ export async function pollQrcode(token: string): Promise<QrcodeStatus> {
     return { state: 'success', serviceTicket: data.data.members.service_ticket };
   }
   if (data.status === 50004001) return { state: 'pending' };
+  if (data.status === 50004002 || data.status === 50004003 || data.status === 50004004) {
+    return { state: 'expired' };
+  }
   return { state: 'scanned' };
 }
 
@@ -2588,24 +2591,36 @@ export default function QuarkLoginModal({ open, onClose, onDone }: {
   open: boolean; onClose: () => void; onDone: () => void;
 }) {
   const [url, setUrl] = useState<string>('');
-  const [token, setToken] = useState<string>('');
   const [tip, setTip] = useState('请使用夸克 App 扫码');
 
   useEffect(() => {
     if (!open) return;
-    let stop = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
     (async () => {
       const r = await api.quarkStart();
+      if (cancelled) return;
       setUrl(r.url);
-      setToken(r.token);
-      const timer = setInterval(async () => {
+      setTip('请使用夸克 App 扫码');
+      timer = setInterval(async () => {
         const s = await api.quarkPoll(r.token);
-        if (s.state === 'success') { clearInterval(timer); onDone(); }
-        else if (s.state === 'scanned') setTip('已扫码，请在手机上确认');
+        if (s.state === 'success') {
+          if (timer) clearInterval(timer);
+          onDone();
+        } else if (s.state === 'scanned') {
+          setTip('已扫码，请在手机上确认');
+        } else if (s.state === 'expired') {
+          if (timer) clearInterval(timer);
+          setTip('二维码已过期，请关闭后重试');
+        }
       }, 1500);
-      if (stop) clearInterval(timer);
     })();
-    return () => { stop = true; };
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
   }, [open]);
 
   return (
