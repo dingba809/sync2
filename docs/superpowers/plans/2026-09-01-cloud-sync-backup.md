@@ -675,6 +675,7 @@ import { join, resolve } from 'node:path';
 export interface Config {
   dataDir: string;
   port: number;
+  host: string;
   googleClientId: string;
   googleClientSecret: string;
   googleRedirectUri: string;
@@ -686,6 +687,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     dataDir,
     port: Number(env.PORT || 3000),
+    host: env.HOST || '127.0.0.1',
     googleClientId: env.GOOGLE_CLIENT_ID || '',
     googleClientSecret: env.GOOGLE_CLIENT_SECRET || '',
     googleRedirectUri: env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback'
@@ -2142,6 +2144,8 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
 
   app.delete('/api/accounts/:id', async (req) => {
     const { id } = req.params as any;
+    const tasks = db.prepare(`SELECT id FROM tasks WHERE account_id = ?`).all(id) as any[];
+    for (const t of tasks) scheduler.unregister(t.id);
     deleteAccount(db, id);
     return { ok: true };
   });
@@ -2217,15 +2221,20 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     scheduler.register(t.id, t.schedule, !!t.enabled, () => { void runTaskById(t.id); });
   }
 
+  const running = new Set<string>();
+
   async function runTaskById(taskId: string): Promise<void> {
-    const t = db.prepare(
-      `SELECT id, account_id AS accountId, local_path AS localPath, remote_path AS remotePath FROM tasks WHERE id = ?`
-    ).get(taskId) as any;
-    if (!t) return;
-    const acc = db.prepare(`SELECT provider, credential FROM accounts WHERE id = ?`).get(t.accountId) as any;
-    if (!acc) { insertLog(db, taskId, 'error', '账号不存在'); return; }
-    const runId = insertRun(db, taskId);
+    if (running.has(taskId)) return;
+    running.add(taskId);
     try {
+      const t = db.prepare(
+        `SELECT id, account_id AS accountId, local_path AS localPath, remote_path AS remotePath FROM tasks WHERE id = ?`
+      ).get(taskId) as any;
+      if (!t) return;
+      const acc = db.prepare(`SELECT provider, credential FROM accounts WHERE id = ?`).get(t.accountId) as any;
+      if (!acc) { insertLog(db, taskId, 'error', '账号不存在'); return; }
+      const runId = insertRun(db, taskId);
+      try {
       const cred = decodeCred(acc.credential);
       const provider = createProvider(acc.provider, cred, cfg);
       const quota = await provider.getQuota().catch(() => null);
@@ -2251,6 +2260,9 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       insertLog(db, taskId, 'error', `同步异常: ${msg}`);
       finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
       updateTask(db, taskId, { lastStatus: 'failed' });
+    }
+    } finally {
+      running.delete(taskId);
     }
   }
 
@@ -2286,7 +2298,7 @@ app.setNotFoundHandler((req, reply) => {
 });
 
 const port = cfg.port;
-app.listen({ port, host: '0.0.0.0' }).then(() => {
+app.listen({ port, host: cfg.host }).then(() => {
   console.log(`sync2 listening on http://localhost:${port}`);
 });
 ```
@@ -2739,10 +2751,11 @@ services:
   sync2:
     build: .
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - DATA_DIR=/data
       - PORT=3000
+      - HOST=0.0.0.0
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/auth/google/callback}
