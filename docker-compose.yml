@@ -1,0 +1,18 @@
+services:
+  sync2:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATA_DIR=/data
+      - PORT=3000
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/auth/google/callback}
+    volumes:
+      - sync2-data:/data
+      - ${LOCAL_PATH:-./local}:/backup
+    restart: unless-stopped
+
+volumes:
+  sync2-data:
