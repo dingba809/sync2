@@ -2150,11 +2150,20 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
 
   app.get('/api/auth/google/callback', async (req, reply) => {
     const { code } = req.query as any;
-    const token = await exchangeCodeForToken(cfg, code);
-    const credential = encodeCred({ kind: 'google', refreshToken: token.refresh_token, accessToken: token.access_token });
-    const id = insertAccount(db, { provider: 'google', displayName: 'Google', credential });
-    await reply.redirect(`/?accountAdded=google`);
-    return;
+    try {
+      const token = await exchangeCodeForToken(cfg, code);
+      if (!token.refresh_token) {
+        await reply.redirect('/?error=no_refresh_token');
+        return;
+      }
+      const credential = encodeCred({ kind: 'google', refreshToken: token.refresh_token, accessToken: token.access_token });
+      insertAccount(db, { provider: 'google', displayName: 'Google', credential });
+      await reply.redirect('/?accountAdded=google');
+      return;
+    } catch {
+      await reply.redirect('/?error=google_auth_failed');
+      return;
+    }
   });
 
   app.post('/api/auth/quark/start', async () => {
@@ -2187,6 +2196,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive'
     });
+    reply.raw.flushHeaders();
     let lastId = latestLogId(db);
     const timer = setInterval(() => {
       const rows = listLogs(db, taskId, lastId);
@@ -2212,26 +2222,33 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     const acc = db.prepare(`SELECT provider, credential FROM accounts WHERE id = ?`).get(t.accountId) as any;
     if (!acc) { insertLog(db, taskId, 'error', '账号不存在'); return; }
     const runId = insertRun(db, taskId);
-    const cred = decodeCred(acc.credential);
-    const provider = createProvider(acc.provider, cred, cfg);
-    const quota = await provider.getQuota().catch(() => null);
-    if (quota && quota.total > 0 && quota.used >= quota.total) {
-      insertLog(db, taskId, 'error', '网盘容量已满，中止同步');
-      finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
+    try {
+      const cred = decodeCred(acc.credential);
+      const provider = createProvider(acc.provider, cred, cfg);
+      const quota = await provider.getQuota().catch(() => null);
+      if (quota && quota.total > 0 && quota.used >= quota.total) {
+        insertLog(db, taskId, 'error', '网盘容量已满，中止同步');
+        finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
+        updateTask(db, taskId, { lastStatus: 'failed' });
+        return;
+      }
+      const snapshots = {
+        list: (tid: string) => listSnapshots(db, tid),
+        upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
+        remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
+      };
+      const result = await runSync({
+        taskId, localPath: t.localPath, remotePath: t.remotePath, provider, snapshots,
+        onLog: (level, msg) => insertLog(db, taskId, level, msg)
+      });
+      finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
+      updateTask(db, taskId, { lastStatus: result.error ? 'failed' : 'success' });
+    } catch (e) {
+      const msg = (e as Error).message;
+      insertLog(db, taskId, 'error', `同步异常: ${msg}`);
+      finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
       updateTask(db, taskId, { lastStatus: 'failed' });
-      return;
     }
-    const snapshots = {
-      list: (tid: string) => listSnapshots(db, tid),
-      upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
-      remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
-    };
-    const result = await runSync({
-      taskId, localPath: t.localPath, remotePath: t.remotePath, provider, snapshots,
-      onLog: (level, msg) => insertLog(db, taskId, level, msg)
-    });
-    finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
-    updateTask(db, taskId, { lastStatus: result.error ? 'failed' : 'success' });
   }
 
   for (const t of listTasks(db)) {
