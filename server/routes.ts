@@ -91,7 +91,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     }
   });
 
-  app.post('/api/auth/quark/start', async () => {
+  app.get('/api/auth/quark/start', async () => {
     const r = await getQrcodeToken();
     return { token: r.token, url: r.url };
   });

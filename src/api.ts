@@ -15,7 +15,7 @@ export const api = {
   listAccounts: () => fetch('/api/accounts').then(r => j<any[]>(r)),
   deleteAccount: (id: string) => fetch(`/api/accounts/${id}`, { method: 'DELETE' }).then(r => j<any>(r)),
   googleAuthUrl: () => fetch('/api/auth/google/url').then(r => j<{ url: string }>(r)),
-  quarkStart: () => fetch('/api/auth/quark/start', { method: 'POST' }).then(r => j<{ token: string; url: string }>(r)),
+  quarkStart: () => fetch('/api/auth/quark/start').then(r => j<{ token: string; url: string }>(r)),
   quarkPoll: (token: string) => fetch(`/api/auth/quark/poll?token=${token}`).then(r => j<any>(r)),
   listLogs: (since: number, taskId?: string) => fetch(`/api/logs?since=${since}${taskId ? `&taskId=${taskId}` : ''}`).then(r => j<any[]>(r))
 };
