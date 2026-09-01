@@ -4,7 +4,7 @@ import { planSync, LocalFileInfo, SnapshotEntry, RemoteRef } from './planner.js'
 const lf = (size: number, mtime: number): LocalFileInfo => ({ size, mtime });
 const snap = (size: number, mtime: number, hash: string | null, remoteId: string): SnapshotEntry =>
   ({ size, mtime, hash, remoteId });
-const remote = (size: number, hash?: string): RemoteRef => ({ size, hash });
+const remote = (size: number, hash?: string, id = 'rid'): RemoteRef => ({ id, size, hash });
 
 describe('planSync', () => {
   it('uploads new local file (no snapshot, no remote)', () => {
@@ -64,9 +64,9 @@ describe('planSync', () => {
     const p = planSync(
       new Map(),
       new Map(),
-      new Map([['a.txt', remote(5, 'h')]])
+      new Map([['a.txt', remote(5, 'h', 'remote-id')]])
     );
-    expect(p.toDelete).toEqual([{ relPath: 'a.txt', remoteId: 'a.txt' }]);
+    expect(p.toDelete).toEqual([{ relPath: 'a.txt', remoteId: 'remote-id' }]);
   });
 
   it('uploads local file that exists remotely but has no snapshot (conservative)', () => {

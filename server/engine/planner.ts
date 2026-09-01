@@ -11,6 +11,7 @@ export interface SnapshotEntry {
 }
 
 export interface RemoteRef {
+  id: string;
   size: number;
   hash?: string;
 }
@@ -48,7 +49,7 @@ export function planSync(
 
   for (const [relPath, remote] of remoteEntries) {
     if (!localFiles.has(relPath) && !snapshots.has(relPath)) {
-      toDelete.push({ relPath, remoteId: relPath });
+      toDelete.push({ relPath, remoteId: remote.id });
     }
   }
 
