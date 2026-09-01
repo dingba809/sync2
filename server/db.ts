@@ -97,12 +97,25 @@ export function getAccount(db: Database.Database, id: string):
 }
 
 export function listAccounts(db: Database.Database): AccountRecord[] {
-  return db.prepare(`SELECT id, provider, display_name AS displayName, credential FROM accounts ORDER BY created_at`)
-    .all() as any;
+  return db.prepare(
+    `SELECT id, provider, display_name AS displayName, credential,
+            quota_total AS quotaTotal, quota_used AS quotaUsed
+     FROM accounts ORDER BY created_at`
+  ).all() as any;
 }
 
 export function deleteAccount(db: Database.Database, id: string): void {
-  db.prepare(`DELETE FROM accounts WHERE id = ?`).run(id);
+  db.transaction(() => {
+    const taskIds = db.prepare(`SELECT id FROM tasks WHERE account_id = ?`).all(id)
+      .map((r: any) => r.id) as string[];
+    for (const tid of taskIds) {
+      db.prepare(`DELETE FROM file_snapshots WHERE task_id = ?`).run(tid);
+      db.prepare(`DELETE FROM run_history WHERE task_id = ?`).run(tid);
+      db.prepare(`DELETE FROM logs WHERE task_id = ?`).run(tid);
+    }
+    db.prepare(`DELETE FROM tasks WHERE account_id = ?`).run(id);
+    db.prepare(`DELETE FROM accounts WHERE id = ?`).run(id);
+  })();
 }
 
 export function insertTask(

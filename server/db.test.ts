@@ -25,8 +25,10 @@ describe('db', () => {
   it('lists tasks and honors enabled flag', () => {
     insertTask(db, { name: 'a', accountId: 'x', localPath: '/l', remotePath: '/r', schedule: null, enabled: true });
     insertTask(db, { name: 'b', accountId: 'x', localPath: '/l', remotePath: '/r', schedule: null, enabled: false });
-    expect(listTasks(db).length).toBe(2);
-    expect(listTasks(db)[1].enabled).toBe(false);
+    const tasks = listTasks(db);
+    expect(tasks.length).toBe(2);
+    expect(tasks.find(t => t.name === 'b')!.enabled).toBe(false);
+    expect(tasks.find(t => t.name === 'a')!.enabled).toBe(true);
   });
 
   it('deletes task cascades snapshots', () => {
