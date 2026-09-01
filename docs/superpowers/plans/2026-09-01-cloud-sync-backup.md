@@ -1676,10 +1676,9 @@ export async function getCookiesFromServiceTicket(serviceTicket: string): Promis
 }> {
   const params = new URLSearchParams({ st: serviceTicket, lw: 'scan' });
   const res = await fetch(`${ACCOUNT}?${params}`, { redirect: 'manual' });
-  const setCookies = (res.headers.get('set-cookie') ?? '') as any;
   const cookies: Record<string, string> = {};
-  const list = typeof setCookies === 'string' ? [setCookies] : (setCookies as string[] ?? []);
-  for (const c of list) {
+  const setCookies = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+  for (const c of setCookies) {
     const m = c.match(/^([^=]+)=([^;]*)/);
     if (m) cookies[m[1]] = m[2];
   }
