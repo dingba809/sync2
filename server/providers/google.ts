@@ -76,24 +76,21 @@ export class GoogleDriveProvider implements DriveProvider {
 
     const headers = await this.headers();
     const body = readFileSync(localPath);
-    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=media`, {
+    const boundary = 'sync2-' + Math.random().toString(36).slice(2);
+    const metadata = JSON.stringify({ name, parents: [parentId] });
+    const multipart = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      body,
+      Buffer.from(`\r\n--${boundary}--\r\n`)
+    ]);
+
+    const res = await fetch(`${API}/upload/drive/v3/files?uploadType=multipart`, {
       method: 'POST',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': String(size)
-      },
-      body
+      headers: { ...headers, 'Content-Type': `multipart/related; boundary=${boundary}` },
+      body: multipart
     });
     if (!res.ok) throw new Error(`Google upload failed: ${res.status} ${await res.text()}`);
-    const uploaded = await res.json() as any;
-
-    const metaRes = await fetch(
-      `${API}/drive/v3/files/${uploaded.id}?addParents=${parentId}&removeParents=root&fields=id,name,size,modifiedTime,md5Checksum`,
-      { method: 'PATCH', headers }
-    );
-    if (!metaRes.ok) throw new Error(`Google move failed: ${metaRes.status} ${await metaRes.text()}`);
-    const meta = await metaRes.json() as any;
+    const meta = await res.json() as any;
     return {
       id: meta.id,
       name: meta.name,
