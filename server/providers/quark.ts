@@ -93,10 +93,7 @@ export class QuarkProvider implements DriveProvider {
       task_id: pre.task_id, md5, sha1: ''
     });
     if (hashRes?.finish === true) {
-      const list = await this.listFolder(parentId);
-      const found = list.find(e => !e.isDir && e.name === name);
-      if (found) return found;
-      return { id: pre.task_id, name, isDir: false, size, mtime: Math.floor(Date.now() / 1000), hash: md5 };
+      return await this.findByName(parentId, name, size, md5);
     }
 
     const partSize: number = pre.metadata?.part_size || 4 * 1024 * 1024;
@@ -114,9 +111,19 @@ export class QuarkProvider implements DriveProvider {
     await this.upCommit(pre, etags, baseUrl);
     await this.post(`${BASE}/file/upload/finish`, { task_id: pre.task_id, obj_key: pre.obj_key });
 
-    const list = await this.listFolder(parentId);
-    const uploaded = list.find(e => !e.isDir && e.name === name);
-    return uploaded ?? { id: pre.task_id, name, isDir: false, size, mtime: Math.floor(Date.now() / 1000), hash: md5 };
+    return await this.findByName(parentId, name, size, md5);
+  }
+
+  private async findByName(
+    parentId: string, name: string, size: number, md5: string
+  ): Promise<RemoteEntry> {
+    for (let i = 0; i < 5; i++) {
+      const list = await this.listFolder(parentId);
+      const found = list.find(e => !e.isDir && e.name === name);
+      if (found) return found;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    throw new Error(`Quark upload completed but file not found in listing: ${name}`);
   }
 
   private async upPart(
@@ -143,7 +150,9 @@ export class QuarkProvider implements DriveProvider {
       body: chunk
     });
     if (res.status !== 200) throw new Error(`Quark part upload failed: ${res.status}`);
-    return res.headers.get('etag')!;
+    const etag = res.headers.get('etag');
+    if (!etag) throw new Error(`Quark part upload missing ETag (part ${partNumber})`);
+    return etag;
   }
 
   private async upCommit(pre: any, etags: string[], baseUrl: string): Promise<void> {
