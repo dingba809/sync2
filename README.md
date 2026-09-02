@@ -47,6 +47,16 @@ npm run dev
 docker compose up -d
 ```
 
+首次使用 Docker 前，请先在 Compose 文件同级目录创建网盘配置。该文件会以只读方式挂载到容器的 `/data/drives.config.json`，不会被打进镜像，也不会提交到 Git：
+
+```bash
+cp server/drives.config.example.json drives.config.json
+# 编辑 drives.config.json，填写 Google OAuth 凭据（夸克无需预先填写）
+docker compose up -d
+```
+
+配置文件中的 Google OAuth 值优先于 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` 和 `GOOGLE_REDIRECT_URI` 环境变量。若只想使用环境变量，也仍需保留一个有效的 `drives.config.json` 文件，例如直接使用未修改的模板。
+
 数据（SQLite、主密钥）持久化在 `sync2-data` 卷，要备份的宿主机目录通过 `LOCAL_PATH` 环境变量挂载到容器内 `/backup`：
 
 ```bash

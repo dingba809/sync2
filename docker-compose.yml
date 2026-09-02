@@ -12,6 +12,7 @@ services:
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/auth/google/callback}
     volumes:
       - sync2-data:/data
+      - ./drives.config.json:/data/drives.config.json:ro
       - ${LOCAL_PATH:-./local}:/backup
     restart: unless-stopped
 
