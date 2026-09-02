@@ -14,6 +14,7 @@ export interface RunResult {
   uploadedCount: number;
   deletedCount: number;
   error: string | null;
+  stopped: boolean;
 }
 
 export interface ProgressInfo {
@@ -32,8 +33,9 @@ export async function runSync(opts: {
   snapshots: SnapshotStore;
   onLog: (level: 'info' | 'error', msg: string) => void;
   onProgress?: (p: ProgressInfo) => void;
+  waitForResume?: () => Promise<boolean>;
 }): Promise<RunResult> {
-  const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress } = opts;
+  const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress, waitForResume } = opts;
 
   const st = statSync(localPath);
   if (!st.isDirectory()) throw new Error(`本地目录不存在或不是目录: ${localPath}`);
@@ -77,6 +79,7 @@ export async function runSync(opts: {
   }
 
   for (const relPath of plan.toUpload) {
+    if (waitForResume && !await waitForResume()) return { uploadedCount, deletedCount, error, stopped: true };
     currentFile = relPath;
     try {
       const local = localFiles.get(relPath)!;
@@ -101,6 +104,7 @@ export async function runSync(opts: {
   }
 
   for (const del of plan.toDelete) {
+    if (waitForResume && !await waitForResume()) return { uploadedCount, deletedCount, error, stopped: true };
     currentFile = del.relPath;
     try {
       await withRetry(() => provider.deleteEntry(del.remoteId));
@@ -115,7 +119,7 @@ export async function runSync(opts: {
     }
   }
 
-  return { uploadedCount, deletedCount, error };
+  return { uploadedCount, deletedCount, error, stopped: false };
 }
 
 async function withRetry<T>(fn: () => Promise<T>, times = 3): Promise<T> {

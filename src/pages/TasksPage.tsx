@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Card, Button, Switch, Space, Table, Tag, message, Popconfirm, Tooltip } from 'antd';
-import { PlusOutlined, PlayCircleOutlined, EditOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons';
+import { PlusOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, EditOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import TaskFormModal from '../components/TaskFormModal';
 import TaskDetailDrawer from '../components/TaskDetailDrawer';
@@ -39,6 +39,24 @@ export default function TasksPage() {
     message.success('已触发同步');
   };
 
+  const pause = async (id: string) => {
+    await api.pauseTask(id);
+    await poller.current?.refreshNow();
+    message.success('同步已暂停');
+  };
+
+  const resume = async (id: string) => {
+    await api.resumeTask(id);
+    await poller.current?.refreshNow();
+    message.success('同步已恢复');
+  };
+
+  const stop = async (id: string) => {
+    await api.stopTask(id);
+    await poller.current?.refreshNow();
+    message.success('本次同步将停止');
+  };
+
   const columns = [
     { title: '名称', dataIndex: 'name' },
     { title: '本地目录', dataIndex: 'localPath' },
@@ -52,6 +70,8 @@ export default function TasksPage() {
       title: '状态', dataIndex: 'lastStatus',
       render: (s: string | null) => {
         if (s === 'running') return <Tag icon={<SyncOutlined spin />} color="processing">同步中</Tag>;
+        if (s === 'paused') return <Tag color="gold">已暂停</Tag>;
+        if (s === 'stopped') return <Tag color="orange">已停止</Tag>;
         if (s === 'success') return <Tag color="green">成功</Tag>;
         if (s === 'failed') return <Tag color="red">失败</Tag>;
         return <Tag>未运行</Tag>;
@@ -62,7 +82,13 @@ export default function TasksPage() {
       render: (_: any, t: TaskWithTargets) => (
         <Space>
           <Switch checked={t.enabled} onChange={(v) => toggle(t, v)} />
-          <Tooltip title="立即同步"><Button icon={<PlayCircleOutlined />} onClick={() => run(t.id)} /></Tooltip>
+          {t.lastStatus === 'running' ? <>
+            <Tooltip title="暂停同步"><Button icon={<PauseCircleOutlined />} onClick={() => pause(t.id)} /></Tooltip>
+            <Tooltip title="停止本次同步"><Button danger icon={<StopOutlined />} onClick={() => stop(t.id)} /></Tooltip>
+          </> : t.lastStatus === 'paused' ? <>
+            <Tooltip title="恢复同步"><Button type="primary" icon={<PlayCircleOutlined />} onClick={() => resume(t.id)} /></Tooltip>
+            <Tooltip title="停止本次同步"><Button danger icon={<StopOutlined />} onClick={() => stop(t.id)} /></Tooltip>
+          </> : <Tooltip title="立即同步"><Button icon={<PlayCircleOutlined />} onClick={() => run(t.id)} /></Tooltip>}
           <Tooltip title="详情"><Button icon={<EyeOutlined />} onClick={() => setDetail(t)} /></Tooltip>
           <Tooltip title="编辑"><Button icon={<EditOutlined />} onClick={() => { setEditing(t); setOpen(true); }} /></Tooltip>
           <Popconfirm title="删除该任务？" onConfirm={async () => { await api.deleteTask(t.id); load(); }}>

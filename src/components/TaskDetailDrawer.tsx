@@ -5,6 +5,8 @@ import type { TaskWithTargets, TaskProgress } from '../../shared/types.js';
 
 function statusTag(status: string) {
   if (status === 'running') return <Tag color="processing">同步中</Tag>;
+  if (status === 'paused') return <Tag color="gold">已暂停</Tag>;
+  if (status === 'stopped') return <Tag color="orange">已停止</Tag>;
   if (status === 'success') return <Tag color="green">成功</Tag>;
   if (status === 'failed') return <Tag color="red">失败</Tag>;
   return <Tag>等待</Tag>;

@@ -108,6 +108,22 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     return { ok: true };
   });
 
+  app.post('/api/tasks/:id/pause', async (req) => {
+    const control = controls.get((req.params as any).id);
+    if (control) { control.paused = true; updateTask(db, (req.params as any).id, { lastStatus: 'paused' }); }
+    return { ok: !!control };
+  });
+  app.post('/api/tasks/:id/resume', async (req) => {
+    const control = controls.get((req.params as any).id);
+    if (control) { control.paused = false; control.resolve(); updateTask(db, (req.params as any).id, { lastStatus: 'running' }); }
+    return { ok: !!control };
+  });
+  app.post('/api/tasks/:id/stop', async (req) => {
+    const control = controls.get((req.params as any).id);
+    if (control) { control.stopped = true; control.resolve(); }
+    return { ok: !!control };
+  });
+
   app.get('/api/tasks/:id/runs', async (req) => {
     const { id } = req.params as any;
     return listRuns(db, id);
@@ -245,6 +261,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   });
 
   const running = new Set<string>();
+  const controls = new Map<string, { paused: boolean; stopped: boolean; resolve: () => void; wait: () => Promise<boolean> }>();
 
   function reschedule(taskId: string): void {
     const t = db.prepare(`SELECT id, schedule, enabled FROM tasks WHERE id = ?`).get(taskId) as any;
@@ -255,6 +272,12 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   async function runTaskById(taskId: string): Promise<void> {
     if (running.has(taskId)) return;
     running.add(taskId);
+    let release = () => {};
+    const control = { paused: false, stopped: false, resolve: () => release(), wait: async () => {
+      while (control.paused && !control.stopped) await new Promise<void>(resolve => { release = resolve; });
+      return !control.stopped;
+    }};
+    controls.set(taskId, control);
     try {
       const t = db.prepare(`SELECT id, name, local_path AS localPath FROM tasks WHERE id = ?`).get(taskId) as any;
       if (!t) return;
@@ -289,6 +312,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
 
       let anyFailed = false;
       for (const tg of targets) {
+        if (!await control.wait()) { updateTask(db, taskId, { lastStatus: 'stopped' }); return; }
         const tp = progress.targets.find(x => x.targetId === tg.id)!;
         tp.status = 'running';
         publishProgress(taskId, progress);
@@ -335,8 +359,16 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
               tp.deletedCount = p.deletedCount;
               tp.totalDelete = p.totalDelete;
               publishProgress(taskId, progress);
-            }
+            },
+            waitForResume: control.wait
           });
+          if (result.stopped) {
+            tp.status = 'failed';
+            finishRun(db, runId, { status: 'failed', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: 'stopped by user' });
+            publishProgress(taskId, progress);
+            updateTask(db, taskId, { lastStatus: 'stopped' });
+            return;
+          }
           tp.status = result.error ? 'failed' : 'success';
           if (result.error) anyFailed = true;
           finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
@@ -365,6 +397,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       updateTask(db, taskId, { lastStatus: 'failed' });
     } finally {
       running.delete(taskId);
+      controls.delete(taskId);
     }
   }
 

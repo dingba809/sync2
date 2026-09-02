@@ -51,4 +51,21 @@ describe('runSync', () => {
     expect(result.deletedCount).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('stops before starting the next file operation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-'));
+    writeFileSync(join(dir, 'new.txt'), 'hello');
+    const remote = new Map<string, RemoteEntry>();
+
+    const result = await runSync({
+      targetId: 't', localPath: dir, remotePath: '/r',
+      provider: fakeProvider(remote), snapshots: snapshots(),
+      onLog: () => {},
+      waitForResume: async () => false
+    });
+
+    expect(result).toMatchObject({ uploadedCount: 0, deletedCount: 0, stopped: true });
+    expect(remote.size).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
