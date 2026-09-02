@@ -39,23 +39,50 @@ export interface AccountRecord {
 export interface TaskRecord {
   id: string;
   name: string;
-  accountId: string;
   localPath: string;
-  remotePath: string;
   schedule: string | null;
   enabled: boolean;
   lastStatus: string | null;
 }
 
+export interface TaskTarget {
+  id: string;
+  accountId: string;
+  remotePath: string;
+}
+
+export interface TaskWithTargets extends TaskRecord {
+  targets: TaskTarget[];
+}
+
 export interface RunRecord {
   id: string;
   taskId: string;
+  targetId: string;
   startedAt: number;
   finishedAt: number | null;
   status: 'running' | 'success' | 'failed';
   uploadedCount: number;
   deletedCount: number;
   error: string | null;
+}
+
+export interface TargetProgress {
+  targetId: string;
+  accountName: string;
+  remotePath: string;
+  status: 'pending' | 'running' | 'success' | 'failed';
+  currentFile: string | null;
+  uploadedCount: number;
+  totalUpload: number;
+  deletedCount: number;
+  totalDelete: number;
+}
+
+export interface TaskProgress {
+  taskId: string;
+  status: 'running' | 'success' | 'failed';
+  targets: TargetProgress[];
 }
 
 export interface LogRecord {
