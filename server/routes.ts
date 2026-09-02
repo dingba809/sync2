@@ -7,7 +7,7 @@ import { encrypt, decrypt } from './crypto.js';
 import {
   insertAccount, updateAccountCredential, listAccounts, deleteAccount,
   insertTask, updateTask, listTasks, deleteTask, getAccount, getTask,
-  insertTarget, listTargets, deleteTargetsByTask,
+  insertTarget, listTargets, deleteTarget,
   insertRun, finishRun, listRuns, insertLog, listLogs, latestLogId,
   listSnapshots, upsertSnapshot, deleteSnapshot
 } from './db.js';
@@ -52,9 +52,18 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       schedule: body.schedule ?? null, enabled: body.enabled ?? true
     });
     if (Array.isArray(body.targets)) {
-      deleteTargetsByTask(db, id);
+      const oldTargets = listTargets(db, id);
+      const newKeys = new Set(body.targets.map((t: any) => `${t.accountId}|${t.remotePath}`));
+      const oldKeys = new Set(oldTargets.map(t => `${t.accountId}|${t.remotePath}`));
+      for (const ot of oldTargets) {
+        if (!newKeys.has(`${ot.accountId}|${ot.remotePath}`)) {
+          deleteTarget(db, ot.id);
+        }
+      }
       for (const tg of body.targets) {
-        insertTarget(db, { taskId: id, accountId: tg.accountId, remotePath: tg.remotePath });
+        if (!oldKeys.has(`${tg.accountId}|${tg.remotePath}`)) {
+          insertTarget(db, { taskId: id, accountId: tg.accountId, remotePath: tg.remotePath });
+        }
       }
     }
     reschedule(id);
@@ -254,8 +263,9 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
           continue;
         }
 
-        const runId = insertRun(db, taskId, tg.id);
+        let runId: string | null = null;
         try {
+          runId = insertRun(db, taskId, tg.id);
           const cred = decodeCred(acc.credential);
           const provider = createProvider(acc.provider, cred, cfg);
           const quota = await provider.getQuota().catch(() => null);
@@ -297,7 +307,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
           tp.status = 'failed';
           anyFailed = true;
           insertLog(db, taskId, 'error', `目标 ${tg.remotePath} 同步异常: ${msg}`);
-          finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
+          if (runId) finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
           publishProgress(taskId, progress);
         }
       }
@@ -305,6 +315,10 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       progress.status = anyFailed ? 'failed' : 'success';
       publishProgress(taskId, progress);
       updateTask(db, taskId, { lastStatus: anyFailed ? 'failed' : 'success' });
+    } catch (e) {
+      const msg = (e as Error).message;
+      insertLog(db, taskId, 'error', `同步异常: ${msg}`);
+      updateTask(db, taskId, { lastStatus: 'failed' });
     } finally {
       running.delete(taskId);
     }

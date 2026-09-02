@@ -254,6 +254,12 @@ export function deleteTargetsByTask(db: Database.Database, taskId: string): void
   db.prepare(`DELETE FROM task_targets WHERE task_id = ?`).run(taskId);
 }
 
+export function deleteTarget(db: Database.Database, targetId: string): void {
+  db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(targetId);
+  db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(targetId);
+  db.prepare(`DELETE FROM task_targets WHERE id = ?`).run(targetId);
+}
+
 export function deleteTask(db: Database.Database, id: string): void {
   db.transaction(() => {
     deleteTargetsByTask(db, id);
