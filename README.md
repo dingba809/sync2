@@ -8,7 +8,10 @@
 - **单向镜像备份**：以本地为准，本地新增、修改、删除都会同步到网盘对应位置。
 - **增量检测**：按「文件大小 + 修改时间」快速比对，未变化的文件跳过，支持秒传。
 - **大文件友好**：Google Drive（resumable）与夸克（OSS 分片）均采用流式分片上传，不整读内存。
-- **多任务独立调度**：多对「本地目录 ↔ 网盘目录」各自配置，支持手动触发或 cron 定时。
+- **多备份目标**：一个任务可同时备份到多个网盘（每个目标 = 账号 + 远程目录），互不干扰。
+- **实时进度**：同步时状态显示「同步中」，点开详情可看每个目标的上传/删除详细进度。
+- **任务可编辑**：任务名、本地目录、调度、备份目标均可在界面随时增删改。
+- **多任务独立调度**：多个任务各自配置，支持手动触发或 cron 定时。
 - **凭据加密**：Google refresh_token / 夸克 Cookie 用 AES-256-GCM 加密后落盘，主密钥独立保存。
 
 ## 📦 环境要求
@@ -62,22 +65,22 @@ LOCAL_PATH=/你的/本地/目录 docker compose up -d
 3. 配置 **OAuth 同意屏幕**（用户类型选「外部」，把你自己加为测试用户）。
 4. 在 **凭据 → 创建凭据 → OAuth 客户端 ID**，应用类型选「Web 应用」，
    「已获授权的重定向 URI」填 `http://localhost:3000/api/auth/google/callback`。
-5. 拿到客户端 ID 与客户端密钥后，通过环境变量注入：
+5. 拿到客户端 ID 与客户端密钥后，复制 `server/drives.config.example.json` 为项目根目录的 `drives.config.json` 并填入：
 
-```bash
-GOOGLE_CLIENT_ID=你的客户端ID \
-GOOGLE_CLIENT_SECRET=你的客户端密钥 \
-GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback \
-npm start
+```json
+{
+  "google": {
+    "clientId": "你的客户端ID",
+    "clientSecret": "你的客户端密钥",
+    "redirectUri": "http://localhost:3000/api/auth/google/callback"
+  },
+  "quark": {}
+}
 ```
 
-Docker 部署时写进 `.env`：
+`drives.config.json` 已加入 `.gitignore`（含密钥不上传）。新增网盘时只需在该文件加一项配置，并在 `server/providers/` 加对应驱动。
 
-```bash
-GOOGLE_CLIENT_ID=你的客户端ID
-GOOGLE_CLIENT_SECRET=你的客户端密钥
-GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
-```
+> 兼容旧方式：未提供配置文件时，仍可用 `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` 环境变量。
 
 ### 环境变量总览
 
@@ -86,39 +89,42 @@ GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
 | `PORT` | 监听端口 | `3000` |
 | `HOST` | 监听地址 | `127.0.0.1`（仅本机访问） |
 | `DATA_DIR` | 数据目录（SQLite、主密钥） | `./data` |
-| `GOOGLE_CLIENT_ID` | Google OAuth 客户端 ID | 空 |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth 客户端密钥 | 空 |
-| `GOOGLE_REDIRECT_URI` | Google OAuth 回调地址 | `http://localhost:3000/api/auth/google/callback` |
+| `GOOGLE_CLIENT_ID` | Google OAuth 客户端 ID（配置文件缺失时的回退） | 空 |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 客户端密钥（配置文件缺失时的回退） | 空 |
+| `GOOGLE_REDIRECT_URI` | Google OAuth 回调地址（配置文件缺失时的回退） | `http://localhost:3000/api/auth/google/callback` |
 
 > 安全提示：默认只监听 `127.0.0.1`，请勿随意把 `HOST` 设为 `0.0.0.0` 暴露到公网。若确需远程访问，请务必放在反向代理 + 鉴权之后。
 
 ## 🧭 使用流程
 
 1. **添加网盘账号**：Google 走 OAuth 授权，夸克走扫码。
-2. **新建同步任务**：填写任务名、选择账号、本地目录（绝对路径）、远程目录、调度（cron，留空为手动）。
-3. **立即同步**：点任务行的「同步」按钮，或在「日志」页查看实时进度。
+2. **新建同步任务**：填写任务名、本地目录（绝对路径）、调度（cron，留空为手动），并添加一个或多个备份目标（每个目标 = 网盘账号 + 远程目录）。
+3. **立即同步**：点任务行的「同步」按钮，状态列显示「同步中」；点「详情」可实时查看每个目标的上传/删除进度。
+4. **编辑任务**：点「编辑」随时修改任务名、目录、调度或增删备份目标。
 
 ## 📁 项目结构
 
 ```
 sync2/
-├── shared/types.ts          # 前后端共享类型、DriveProvider 接口
-├── server/                  # 后端（Fastify）
-│   ├── index.ts             # 入口
-│   ├── config.ts            # 配置与主密钥管理
-│   ├── crypto.ts            # AES-256-GCM 加解密
-│   ├── db.ts                # SQLite 数据层
-│   ├── scheduler.ts         # cron 定时调度
-│   ├── provider-factory.ts  # 网盘驱动工厂
-│   ├── routes.ts            # REST API + SSE 日志流
-│   ├── providers/           # google.ts / quark.ts 网盘驱动
-│   ├── auth/                # google.ts / quark.ts 登录流程
-│   └── engine/              # scanner / planner / executor 同步引擎
-├── src/                     # 前端（React + Vite + Ant Design）
-│   ├── api.ts               # API 客户端
+├── shared/types.ts              # 前后端共享类型、DriveProvider 接口
+├── drives.config.json           # 网盘配置（gitignore，含密钥）
+├── server/
+│   ├── drives.config.example.json  # 网盘配置模板
+│   ├── index.ts                 # 入口
+│   ├── config.ts                # 配置与主密钥管理
+│   ├── crypto.ts                # AES-256-GCM 加解密
+│   ├── db.ts                    # SQLite 数据层（含 task_targets 多目标）
+│   ├── scheduler.ts             # cron 定时调度
+│   ├── provider-factory.ts      # 网盘驱动工厂
+│   ├── routes.ts                # REST API + SSE 日志/进度流
+│   ├── providers/               # google.ts / quark.ts 网盘驱动
+│   ├── auth/                    # google.ts / quark.ts 登录流程
+│   └── engine/                  # scanner / planner / executor 同步引擎
+├── src/                         # 前端（React + Vite + Ant Design）
+│   ├── api.ts                   # API 客户端
 │   ├── App.tsx / main.tsx
-│   ├── pages/               # 任务 / 账号 / 日志
-│   └── components/          # 任务表单 / 夸克扫码弹窗
+│   ├── pages/                   # 任务 / 账号 / 日志
+│   └── components/              # 任务表单 / 任务详情 / 夸克扫码弹窗
 ├── Dockerfile / docker-compose.yml
 └── package.json / tsconfig.json / vite.config.ts / build-server.mjs
 ```
