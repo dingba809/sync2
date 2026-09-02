@@ -1,6 +1,7 @@
 import type { DriveProvider, RemoteEntry } from '../../shared/types.js';
 import { scanDirectory } from './scanner.js';
 import { planSync } from './planner.js';
+import { statSync } from 'node:fs';
 import { join, posix } from 'node:path';
 
 export interface SnapshotStore {
@@ -33,6 +34,9 @@ export async function runSync(opts: {
   onProgress?: (p: ProgressInfo) => void;
 }): Promise<RunResult> {
   const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress } = opts;
+
+  const st = statSync(localPath);
+  if (!st.isDirectory()) throw new Error(`本地目录不存在或不是目录: ${localPath}`);
 
   const localFiles = scanDirectory(localPath);
   const snapshotMap = snapshots.list(targetId);

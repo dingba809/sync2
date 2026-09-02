@@ -20,6 +20,15 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   const encodeCred = (c: unknown) => encrypt(JSON.stringify(c), masterKey);
   const decodeCred = (s: string) => JSON.parse(decrypt(s, masterKey));
 
+  const progressStore = new Map<string, TaskProgress>();
+  const progressListeners = new Map<string, Set<(p: TaskProgress) => void>>();
+
+  function publishProgress(taskId: string, p: TaskProgress): void {
+    progressStore.set(taskId, p);
+    const set = progressListeners.get(taskId);
+    if (set) for (const fn of set) fn(p);
+  }
+
   app.get('/api/tasks', async () => {
     return listTasks(db).map(t => ({ ...t, targets: listTargets(db, t.id) }));
   });
@@ -67,6 +76,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       }
     }
     reschedule(id);
+    progressStore.delete(id);
     return { ok: true };
   });
 
@@ -82,6 +92,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     const { id } = req.params as any;
     scheduler.unregister(id);
     deleteTask(db, id);
+    progressStore.delete(id);
     return { ok: true };
   });
 
@@ -175,15 +186,6 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     }, 1000);
     req.raw.on('close', () => clearInterval(timer));
   });
-
-  const progressStore = new Map<string, TaskProgress>();
-  const progressListeners = new Map<string, Set<(p: TaskProgress) => void>>();
-
-  function publishProgress(taskId: string, p: TaskProgress): void {
-    progressStore.set(taskId, p);
-    const set = progressListeners.get(taskId);
-    if (set) for (const fn of set) fn(p);
-  }
 
   app.get('/api/tasks/:id/progress', async (req) => {
     return progressStore.get((req.params as any).id) ?? null;

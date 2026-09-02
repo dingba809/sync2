@@ -170,14 +170,17 @@ export function deleteAccount(db: Database.Database, id: string): void {
       db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(tid);
       db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(tid);
     }
-    const taskIds = db.prepare(`SELECT task_id AS id FROM task_targets WHERE account_id = ?`).all(id)
+    const taskIds = db.prepare(`SELECT DISTINCT task_id AS id FROM task_targets WHERE account_id = ?`).all(id)
       .map((r: any) => r.id) as string[];
     db.prepare(`DELETE FROM task_targets WHERE account_id = ?`).run(id);
     for (const tid of taskIds) {
-      db.prepare(`DELETE FROM logs WHERE task_id = ?`).run(tid);
-      db.prepare(`DELETE FROM run_history WHERE task_id = ? AND target_id IS NULL`).run(tid);
+      const remaining = db.prepare(`SELECT COUNT(*) AS c FROM task_targets WHERE task_id = ?`).get(tid) as any;
+      if (remaining.c === 0) {
+        db.prepare(`DELETE FROM logs WHERE task_id = ?`).run(tid);
+        db.prepare(`DELETE FROM run_history WHERE task_id = ?`).run(tid);
+        db.prepare(`DELETE FROM tasks WHERE id = ?`).run(tid);
+      }
     }
-    db.prepare(`DELETE FROM tasks WHERE id NOT IN (SELECT DISTINCT task_id FROM task_targets)`).run();
     db.prepare(`DELETE FROM accounts WHERE id = ?`).run(id);
   })();
 }
