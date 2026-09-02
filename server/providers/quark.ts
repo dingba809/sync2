@@ -5,6 +5,7 @@ import { createReadStream, statSync } from 'node:fs';
 const BASE = 'https://drive-pc.quark.cn/1/clouddrive';
 const OSS_UA = 'aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit';
 const LIST_PAGE_SIZE = 1000;
+const HASH_CONTEXT_SETTLE_MS = 300;
 
 function defParams(): URLSearchParams {
   return new URLSearchParams({
@@ -117,6 +118,10 @@ export class QuarkProvider implements DriveProvider {
       return await this.findByName(parentId, name, size, md5);
     }
 
+    // Quark returns from update/hash before the multipart hash context is always
+    // visible to OSS. This is especially observable in a low-latency container.
+    await sleep(HASH_CONTEXT_SETTLE_MS);
+
     const partSize: number = pre.metadata?.part_size || 4 * 1024 * 1024;
     const host = String(pre.upload_url || '').replace(/^https?:\/\//, '');
     const baseUrl = `https://${pre.bucket}.${host}/${pre.obj_key}`;
@@ -149,30 +154,39 @@ export class QuarkProvider implements DriveProvider {
   private async upPart(
     pre: any, mimeType: string, partNumber: number, chunk: Buffer<ArrayBuffer>, baseUrl: string
   ): Promise<string> {
-    const timeStr = new Date().toUTCString();
-    const authMeta =
-      `PUT\n\n${mimeType}\n${timeStr}\n` +
-      `x-oss-date:${timeStr}\nx-oss-user-agent:${OSS_UA}\n` +
-      `/${pre.bucket}/${pre.obj_key}?partNumber=${partNumber}&uploadId=${pre.upload_id}`;
-    const auth = await this.post(`${BASE}/file/upload/auth`, {
-      task_id: pre.task_id, auth_info: pre.auth_info, auth_meta: authMeta
-    });
-    const url = `${baseUrl}?partNumber=${partNumber}&uploadId=${pre.upload_id}`;
-    const res = await this.fetchWithPacing(url, {
-      method: 'PUT',
-      headers: {
-        'Authorization': auth.auth_key,
-        'Content-Type': mimeType,
-        'Referer': 'https://pan.quark.cn/',
-        'x-oss-date': timeStr,
-        'x-oss-user-agent': OSS_UA
-      },
-      body: chunk
-    });
-    if (res.status !== 200) throw new Error(`Quark part upload failed: ${res.status}${await ossErrorDetail(res)}`);
-    const etag = res.headers.get('etag');
-    if (!etag) throw new Error(`Quark part upload missing ETag (part ${partNumber})`);
-    return etag;
+    let lastError = '';
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const timeStr = new Date().toUTCString();
+      const authMeta =
+        `PUT\n\n${mimeType}\n${timeStr}\n` +
+        `x-oss-date:${timeStr}\nx-oss-user-agent:${OSS_UA}\n` +
+        `/${pre.bucket}/${pre.obj_key}?partNumber=${partNumber}&uploadId=${pre.upload_id}`;
+      const auth = await this.post(`${BASE}/file/upload/auth`, {
+        task_id: pre.task_id, auth_info: pre.auth_info, auth_meta: authMeta
+      });
+      const url = `${baseUrl}?partNumber=${partNumber}&uploadId=${pre.upload_id}`;
+      const res = await this.fetchWithPacing(url, {
+        method: 'PUT',
+        headers: {
+          'Authorization': auth.auth_key,
+          'Content-Type': mimeType,
+          'Referer': 'https://pan.quark.cn/',
+          'x-oss-date': timeStr,
+          'x-oss-user-agent': OSS_UA
+        },
+        body: chunk
+      });
+      if (res.status === 200) {
+        const etag = res.headers.get('etag');
+        if (!etag) throw new Error(`Quark part upload missing ETag (part ${partNumber})`);
+        return etag;
+      }
+      const detail = await ossErrorDetail(res);
+      lastError = `Quark part upload failed: ${res.status}${detail}`;
+      if (res.status !== 400 || !detail.includes('NoHashContext')) throw new Error(lastError);
+      await sleep(500 * Math.pow(2, attempt));
+    }
+    throw new Error(lastError);
   }
 
   private async upCommit(pre: any, etags: string[], baseUrl: string): Promise<void> {
@@ -231,6 +245,10 @@ async function ossErrorDetail(res: Response): Promise<string> {
   if (code || message) return ` (${[code, message].filter(Boolean).join(': ')})`;
   const compact = body.replace(/\s+/g, ' ').trim();
   return compact ? ` (${compact.slice(0, 300)})` : '';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function hashFile(path: string): Promise<{ md5: string; sha1: string }> {

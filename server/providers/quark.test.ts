@@ -66,4 +66,19 @@ describe('QuarkProvider', () => {
     }, 'application/octet-stream', 1, Buffer.from('x'), 'https://bucket.example.com/key'))
       .rejects.toThrow('RequestTimeTooSkewed: clock skew');
   });
+
+  it('retries a part while Quark creates its hash context', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(okJson({ auth_key: 'first-signature' }))
+      .mockResolvedValueOnce(new Response('<Error><Code>NoHashContext</Code></Error>', { status: 400 }))
+      .mockResolvedValueOnce(okJson({ auth_key: 'second-signature' }))
+      .mockResolvedValueOnce(new Response('', { status: 200, headers: { etag: 'etag-1' } }));
+
+    const etag = await (provider() as any).upPart({
+      bucket: 'bucket', obj_key: 'key', upload_id: 'upload', task_id: 'task', auth_info: 'auth'
+    }, 'application/octet-stream', 1, Buffer.from('x'), 'https://bucket.example.com/key');
+
+    expect(etag).toBe('etag-1');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
 });
