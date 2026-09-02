@@ -42,7 +42,7 @@ describe('runSync', () => {
     snap.upsert('t', 'old.txt', { size: 4, mtime: 1, hash: null, remoteId: 'old-id' });
 
     const result = await runSync({
-      taskId: 't', localPath: dir, remotePath: '/r',
+      targetId: 't', localPath: dir, remotePath: '/r',
       provider: fakeProvider(remote), snapshots: snap,
       onLog: () => {}
     });

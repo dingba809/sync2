@@ -4,9 +4,9 @@ import { planSync } from './planner.js';
 import { join, posix } from 'node:path';
 
 export interface SnapshotStore {
-  list(taskId: string): Map<string, { size: number; mtime: number; hash: string | null; remoteId: string }>;
-  upsert(taskId: string, relPath: string, s: { size: number; mtime: number; hash: string | null; remoteId: string }): void;
-  remove(taskId: string, relPath: string): void;
+  list(targetId: string): Map<string, { size: number; mtime: number; hash: string | null; remoteId: string }>;
+  upsert(targetId: string, relPath: string, s: { size: number; mtime: number; hash: string | null; remoteId: string }): void;
+  remove(targetId: string, relPath: string): void;
 }
 
 export interface RunResult {
@@ -15,18 +15,27 @@ export interface RunResult {
   error: string | null;
 }
 
+export interface ProgressInfo {
+  currentFile: string | null;
+  uploadedCount: number;
+  totalUpload: number;
+  deletedCount: number;
+  totalDelete: number;
+}
+
 export async function runSync(opts: {
-  taskId: string;
+  targetId: string;
   localPath: string;
   remotePath: string;
   provider: DriveProvider;
   snapshots: SnapshotStore;
   onLog: (level: 'info' | 'error', msg: string) => void;
+  onProgress?: (p: ProgressInfo) => void;
 }): Promise<RunResult> {
-  const { taskId, localPath, remotePath, provider, snapshots, onLog } = opts;
+  const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress } = opts;
 
   const localFiles = scanDirectory(localPath);
-  const snapshotMap = snapshots.list(taskId);
+  const snapshotMap = snapshots.list(targetId);
 
   const rootId = await resolveRemoteRoot(provider, remotePath);
   const remoteEntries = await listRemoteRecursive(provider, rootId);
@@ -40,6 +49,12 @@ export async function runSync(opts: {
   let uploadedCount = 0;
   let deletedCount = 0;
   let error: string | null = null;
+  let currentFile: string | null = null;
+
+  const totalUpload = plan.toUpload.length;
+  const totalDelete = plan.toDelete.length;
+  const report = () => onProgress?.({ currentFile, uploadedCount, totalUpload, deletedCount, totalDelete });
+  report();
 
   const folderCache = new Map<string, string>();
   folderCache.set('', rootId);
@@ -58,13 +73,14 @@ export async function runSync(opts: {
   }
 
   for (const relPath of plan.toUpload) {
+    currentFile = relPath;
     try {
       const local = localFiles.get(relPath)!;
       const parentId = await parentFor(relPath);
       const name = posix.basename(relPath);
       const oldSnapshot = snapshotMap.get(relPath);
       const entry = await withRetry(() => provider.uploadFile(join(localPath, relPath), parentId, name));
-      snapshots.upsert(taskId, relPath, {
+      snapshots.upsert(targetId, relPath, {
         size: local.size, mtime: local.mtime, hash: entry.hash ?? null, remoteId: entry.id
       });
       if (oldSnapshot && oldSnapshot.remoteId && oldSnapshot.remoteId !== entry.id) {
@@ -72,21 +88,26 @@ export async function runSync(opts: {
       }
       uploadedCount++;
       onLog('info', `上传 ${relPath}`);
+      report();
     } catch (e) {
       error = (e as Error).message;
       onLog('error', `上传失败 ${relPath}: ${error}`);
+      report();
     }
   }
 
   for (const del of plan.toDelete) {
+    currentFile = del.relPath;
     try {
       await withRetry(() => provider.deleteEntry(del.remoteId));
-      snapshots.remove(taskId, del.relPath);
+      snapshots.remove(targetId, del.relPath);
       deletedCount++;
       onLog('info', `删除 ${del.relPath}`);
+      report();
     } catch (e) {
       error = (e as Error).message;
       onLog('error', `删除失败 ${del.relPath}: ${error}`);
+      report();
     }
   }
 
