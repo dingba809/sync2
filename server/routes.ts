@@ -2,10 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import type Database from 'better-sqlite3';
 import type { Config } from './config.js';
 import type { Scheduler } from './scheduler.js';
+import type { TaskProgress, TargetProgress } from '../shared/types.js';
 import { encrypt, decrypt } from './crypto.js';
 import {
   insertAccount, updateAccountCredential, listAccounts, deleteAccount,
-  insertTask, updateTask, listTasks, deleteTask,
+  insertTask, updateTask, listTasks, deleteTask, getAccount, getTask,
+  insertTarget, listTargets, deleteTargetsByTask,
   insertRun, finishRun, listRuns, insertLog, listLogs, latestLogId,
   listSnapshots, upsertSnapshot, deleteSnapshot
 } from './db.js';
@@ -18,14 +20,26 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   const encodeCred = (c: unknown) => encrypt(JSON.stringify(c), masterKey);
   const decodeCred = (s: string) => JSON.parse(decrypt(s, masterKey));
 
-  app.get('/api/tasks', async () => listTasks(db));
+  app.get('/api/tasks', async () => {
+    return listTasks(db).map(t => ({ ...t, targets: listTargets(db, t.id) }));
+  });
+
+  app.get('/api/tasks/:id', async (req) => {
+    const { id } = req.params as any;
+    const t = getTask(db, id);
+    if (!t) return { error: 'not found' };
+    return { ...t, targets: listTargets(db, id) };
+  });
 
   app.post('/api/tasks', async (req) => {
     const body = req.body as any;
     const id = insertTask(db, {
-      name: body.name, accountId: body.accountId, localPath: body.localPath,
-      remotePath: body.remotePath, schedule: body.schedule ?? null, enabled: body.enabled ?? true
+      name: body.name, localPath: body.localPath,
+      schedule: body.schedule ?? null, enabled: body.enabled ?? true
     });
+    for (const tg of body.targets ?? []) {
+      insertTarget(db, { taskId: id, accountId: tg.accountId, remotePath: tg.remotePath });
+    }
     reschedule(id);
     return { id };
   });
@@ -33,7 +47,24 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   app.put('/api/tasks/:id', async (req) => {
     const { id } = req.params as any;
     const body = req.body as any;
-    updateTask(db, id, body);
+    updateTask(db, id, {
+      name: body.name, localPath: body.localPath,
+      schedule: body.schedule ?? null, enabled: body.enabled ?? true
+    });
+    if (Array.isArray(body.targets)) {
+      deleteTargetsByTask(db, id);
+      for (const tg of body.targets) {
+        insertTarget(db, { taskId: id, accountId: tg.accountId, remotePath: tg.remotePath });
+      }
+    }
+    reschedule(id);
+    return { ok: true };
+  });
+
+  app.post('/api/tasks/:id/toggle', async (req) => {
+    const { id } = req.params as any;
+    const body = req.body as any;
+    updateTask(db, id, { enabled: !!body.enabled });
     reschedule(id);
     return { ok: true };
   });
@@ -62,7 +93,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
 
   app.delete('/api/accounts/:id', async (req) => {
     const { id } = req.params as any;
-    const tasks = db.prepare(`SELECT id FROM tasks WHERE account_id = ?`).all(id) as any[];
+    const tasks = db.prepare(`SELECT task_id AS id FROM task_targets WHERE account_id = ?`).all(id) as any[];
     for (const t of tasks) scheduler.unregister(t.id);
     deleteAccount(db, id);
     return { ok: true };
@@ -136,6 +167,35 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     req.raw.on('close', () => clearInterval(timer));
   });
 
+  const progressStore = new Map<string, TaskProgress>();
+  const progressListeners = new Map<string, Set<(p: TaskProgress) => void>>();
+
+  function publishProgress(taskId: string, p: TaskProgress): void {
+    progressStore.set(taskId, p);
+    const set = progressListeners.get(taskId);
+    if (set) for (const fn of set) fn(p);
+  }
+
+  app.get('/api/tasks/:id/progress', async (req) => {
+    return progressStore.get((req.params as any).id) ?? null;
+  });
+
+  app.get('/api/tasks/:id/progress/stream', (req, reply) => {
+    const { id } = req.params as any;
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive'
+    });
+    reply.raw.flushHeaders();
+    const send = (p: TaskProgress) => reply.raw.write(`data: ${JSON.stringify(p)}\n\n`);
+    const cur = progressStore.get(id);
+    if (cur) send(cur);
+    if (!progressListeners.has(id)) progressListeners.set(id, new Set());
+    progressListeners.get(id)!.add(send);
+    req.raw.on('close', () => { progressListeners.get(id)?.delete(send); });
+  });
+
   const running = new Set<string>();
 
   function reschedule(taskId: string): void {
@@ -148,40 +208,103 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     if (running.has(taskId)) return;
     running.add(taskId);
     try {
-      const t = db.prepare(
-        `SELECT id, account_id AS accountId, local_path AS localPath, remote_path AS remotePath FROM tasks WHERE id = ?`
-      ).get(taskId) as any;
+      const t = db.prepare(`SELECT id, local_path AS localPath FROM tasks WHERE id = ?`).get(taskId) as any;
       if (!t) return;
-      const acc = db.prepare(`SELECT provider, credential FROM accounts WHERE id = ?`).get(t.accountId) as any;
-      if (!acc) { insertLog(db, taskId, 'error', '账号不存在'); return; }
-      const runId = insertRun(db, taskId);
-      try {
-        const cred = decodeCred(acc.credential);
-        const provider = createProvider(acc.provider, cred, cfg);
-        const quota = await provider.getQuota().catch(() => null);
-        if (quota && quota.total > 0 && quota.used >= quota.total) {
-          insertLog(db, taskId, 'error', '网盘容量已满，中止同步');
-          finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
-          updateTask(db, taskId, { lastStatus: 'failed' });
-          return;
-        }
-        const snapshots = {
-          list: (tid: string) => listSnapshots(db, tid),
-          upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
-          remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
-        };
-        const result = await runSync({
-          taskId, localPath: t.localPath, remotePath: t.remotePath, provider, snapshots,
-          onLog: (level, msg) => insertLog(db, taskId, level, msg)
-        });
-        finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
-        updateTask(db, taskId, { lastStatus: result.error ? 'failed' : 'success' });
-      } catch (e) {
-        const msg = (e as Error).message;
-        insertLog(db, taskId, 'error', `同步异常: ${msg}`);
-        finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
+      const targets = listTargets(db, taskId);
+      if (targets.length === 0) {
+        insertLog(db, taskId, 'error', '任务没有备份目标');
         updateTask(db, taskId, { lastStatus: 'failed' });
+        return;
       }
+
+      updateTask(db, taskId, { lastStatus: 'running' });
+
+      const progress: TaskProgress = {
+        taskId,
+        status: 'running',
+        targets: targets.map(tg => {
+          const acc = getAccount(db, tg.accountId);
+          return {
+            targetId: tg.id,
+            accountName: acc?.displayName ?? '未知',
+            remotePath: tg.remotePath,
+            status: 'pending',
+            currentFile: null,
+            uploadedCount: 0,
+            totalUpload: 0,
+            deletedCount: 0,
+            totalDelete: 0
+          } as TargetProgress;
+        })
+      };
+      publishProgress(taskId, progress);
+
+      let anyFailed = false;
+      for (const tg of targets) {
+        const tp = progress.targets.find(x => x.targetId === tg.id)!;
+        tp.status = 'running';
+        publishProgress(taskId, progress);
+
+        const acc = getAccount(db, tg.accountId);
+        if (!acc) {
+          tp.status = 'failed';
+          anyFailed = true;
+          insertLog(db, taskId, 'error', `目标 ${tg.remotePath}: 账号不存在`);
+          publishProgress(taskId, progress);
+          continue;
+        }
+
+        const runId = insertRun(db, taskId, tg.id);
+        try {
+          const cred = decodeCred(acc.credential);
+          const provider = createProvider(acc.provider, cred, cfg);
+          const quota = await provider.getQuota().catch(() => null);
+          if (quota && quota.total > 0 && quota.used >= quota.total) {
+            tp.status = 'failed';
+            anyFailed = true;
+            insertLog(db, taskId, 'error', `目标 ${tg.remotePath}: 容量已满`);
+            finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
+            publishProgress(taskId, progress);
+            continue;
+          }
+          const snapshots = {
+            list: (tid: string) => listSnapshots(db, tid),
+            upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
+            remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
+          };
+          const result = await runSync({
+            targetId: tg.id,
+            localPath: t.localPath,
+            remotePath: tg.remotePath,
+            provider,
+            snapshots,
+            onLog: (level, msg) => insertLog(db, taskId, level, msg),
+            onProgress: (p) => {
+              tp.currentFile = p.currentFile;
+              tp.uploadedCount = p.uploadedCount;
+              tp.totalUpload = p.totalUpload;
+              tp.deletedCount = p.deletedCount;
+              tp.totalDelete = p.totalDelete;
+              publishProgress(taskId, progress);
+            }
+          });
+          tp.status = result.error ? 'failed' : 'success';
+          if (result.error) anyFailed = true;
+          finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
+          publishProgress(taskId, progress);
+        } catch (e) {
+          const msg = (e as Error).message;
+          tp.status = 'failed';
+          anyFailed = true;
+          insertLog(db, taskId, 'error', `目标 ${tg.remotePath} 同步异常: ${msg}`);
+          finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
+          publishProgress(taskId, progress);
+        }
+      }
+
+      progress.status = anyFailed ? 'failed' : 'success';
+      publishProgress(taskId, progress);
+      updateTask(db, taskId, { lastStatus: anyFailed ? 'failed' : 'success' });
     } finally {
       running.delete(taskId);
     }
