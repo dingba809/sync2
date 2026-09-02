@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Card, Button, Switch, Space, Table, Tag, message, Popconfirm, Tooltip } from 'antd';
 import { PlusOutlined, PlayCircleOutlined, EditOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import TaskFormModal from '../components/TaskFormModal';
 import TaskDetailDrawer from '../components/TaskDetailDrawer';
+import { TaskStatusPolling } from '../taskStatusPolling.js';
 import type { TaskWithTargets } from '../../shared/types.js';
 
 export default function TasksPage() {
@@ -12,13 +13,20 @@ export default function TasksPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<TaskWithTargets | null>(null);
   const [detail, setDetail] = useState<TaskWithTargets | null>(null);
+  const poller = useRef<TaskStatusPolling | null>(null);
 
   const load = async () => {
-    setTasks(await api.listTasks());
+    const nextTasks = await api.listTasks();
+    setTasks(nextTasks);
+    poller.current?.observe(nextTasks);
     setAccounts(await api.listAccounts());
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    poller.current = new TaskStatusPolling(load);
+    void load();
+    return () => poller.current?.dispose();
+  }, []);
 
   const toggle = async (t: TaskWithTargets, enabled: boolean) => {
     await api.toggleTask(t.id, enabled);
@@ -27,6 +35,7 @@ export default function TasksPage() {
 
   const run = async (id: string) => {
     await api.runTask(id);
+    await poller.current?.refreshNow();
     message.success('已触发同步');
   };
 
