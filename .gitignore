@@ -7,3 +7,4 @@ dist-server/
 .env.local
 data/
 .DS_Store
+drives.config.json

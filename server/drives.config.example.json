@@ -1,0 +1,8 @@
+{
+  "google": {
+    "clientId": "",
+    "clientSecret": "",
+    "redirectUri": "http://localhost:3000/api/auth/google/callback"
+  },
+  "quark": {}
+}

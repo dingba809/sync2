@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { loadConfig, getMasterKey } from './config.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,5 +27,21 @@ describe('config', () => {
     const k1 = getMasterKey(d);
     const k2 = getMasterKey(d);
     expect(k1.equals(k2)).toBe(true);
+  });
+
+  it('reads google config from drives.config.json', () => {
+    const d = tmp();
+    writeFileSync(join(d, 'drives.config.json'), JSON.stringify({
+      google: { clientId: 'cfg-id', clientSecret: 'cfg-secret', redirectUri: 'http://cb' }
+    }));
+    const cfg = loadConfig({ DATA_DIR: d } as any);
+    expect(cfg.googleClientId).toBe('cfg-id');
+    expect(cfg.googleClientSecret).toBe('cfg-secret');
+    expect(cfg.googleRedirectUri).toBe('http://cb');
+  });
+
+  it('falls back to env when config file missing', () => {
+    const cfg = loadConfig({ DATA_DIR: tmp(), GOOGLE_CLIENT_ID: 'env-id' } as any);
+    expect(cfg.googleClientId).toBe('env-id');
   });
 });
