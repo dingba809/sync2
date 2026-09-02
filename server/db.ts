@@ -339,17 +339,19 @@ export function insertLog(
     .run(taskId, level, message, Date.now());
 }
 
-export function listLogs(db: Database.Database, taskId: string | null, since: number): LogRecord[] {
-  if (taskId) {
-    return db.prepare(
-      `SELECT id, task_id AS taskId, level, message, created_at AS createdAt
-       FROM logs WHERE task_id = ? AND id > ? ORDER BY id LIMIT 500`
-    ).all(taskId, since) as any;
-  }
+export function listLogs(
+  db: Database.Database, taskId: string | null, since: number,
+  from?: number, to?: number
+): LogRecord[] {
+  const where = ['id > ?'];
+  const params: unknown[] = [since];
+  if (taskId) { where.push('task_id = ?'); params.push(taskId); }
+  if (from !== undefined) { where.push('created_at >= ?'); params.push(from); }
+  if (to !== undefined) { where.push('created_at < ?'); params.push(to); }
   return db.prepare(
     `SELECT id, task_id AS taskId, level, message, created_at AS createdAt
-     FROM logs WHERE id > ? ORDER BY id LIMIT 500`
-  ).all(since) as any;
+     FROM logs WHERE ${where.join(' AND ')} ORDER BY id LIMIT 500`
+  ).all(...params) as any;
 }
 
 export function latestLogId(db: Database.Database): number {

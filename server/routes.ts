@@ -165,7 +165,9 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   app.get('/api/logs', async (req) => {
     const since = Number((req.query as any).since ?? 0);
     const taskId = (req.query as any).taskId ?? null;
-    return listLogs(db, taskId, since);
+    const from = Number((req.query as any).from);
+    const to = Number((req.query as any).to);
+    return listLogs(db, taskId, since, Number.isFinite(from) ? from : undefined, Number.isFinite(to) ? to : undefined);
   });
 
   app.get('/api/logs/stream', (req, reply) => {

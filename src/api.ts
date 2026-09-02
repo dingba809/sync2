@@ -35,7 +35,7 @@ export const api = {
   googleAuthUrl: () => fetch('/api/auth/google/url').then(r => j<{ url: string }>(r)),
   quarkStart: () => fetch('/api/auth/quark/start').then(r => j<{ token: string; url: string }>(r)),
   quarkPoll: (token: string) => fetch(`/api/auth/quark/poll?token=${token}`).then(r => j<any>(r)),
-  listLogs: (since: number, taskId?: string) => fetch(`/api/logs?since=${since}${taskId ? `&taskId=${taskId}` : ''}`).then(r => j<any[]>(r)),
+  listLogs: (since: number, taskId?: string, from?: number, to?: number) => fetch(`/api/logs?since=${since}${taskId ? `&taskId=${taskId}` : ''}${from !== undefined ? `&from=${from}` : ''}${to !== undefined ? `&to=${to}` : ''}`).then(r => j<any[]>(r)),
   getProgress: (id: string) => fetch(`/api/tasks/${id}/progress`).then(r => j<TaskProgress | null>(r)),
   progressStreamUrl: (id: string) => `/api/tasks/${id}/progress/stream`
 };

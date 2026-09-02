@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns } from './db.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns, insertLog, listLogs } from './db.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -88,5 +88,29 @@ describe('db', () => {
     finishRun(db, runId, { status: 'success', uploadedCount: 0, deletedCount: 0, error: null });
 
     expect(getTask(db, id)!.lastCompletedAt).toEqual(expect.any(Number));
+  });
+
+  it('filters logs by creation time range', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-01T12:00:00Z'));
+      insertLog(db, null, 'info', 'before range');
+      vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
+      insertLog(db, null, 'info', 'inside range');
+      vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+      insertLog(db, null, 'info', 'after range');
+
+      const rows = listLogs(
+        db,
+        null,
+        0,
+        Date.parse('2026-09-02T00:00:00Z'),
+        Date.parse('2026-09-03T00:00:00Z')
+      );
+
+      expect(rows.map(row => row.message)).toEqual(['inside range']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
