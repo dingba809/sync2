@@ -16,6 +16,7 @@ import { createProvider } from './provider-factory.js';
 import { googleAuthUrl, exchangeCodeForToken } from './auth/google.js';
 import { getQrcodeToken, pollQrcode, getCookiesFromServiceTicket } from './auth/quark.js';
 import { sendSyncNotification, type NotificationConfig } from './notifications.js';
+import { listDirectories } from './filesystem.js';
 
 export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg: Config, masterKey: Buffer, scheduler: Scheduler): void {
   const encodeCred = (c: unknown) => encrypt(JSON.stringify(c), masterKey);
@@ -110,6 +111,15 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   app.get('/api/tasks/:id/runs', async (req) => {
     const { id } = req.params as any;
     return listRuns(db, id);
+  });
+
+  app.get('/api/filesystem/directories', async (req, reply) => {
+    try {
+      const path = (req.query as any).path as string | undefined;
+      return listDirectories(path);
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
   });
 
   app.get('/api/accounts', async () => listAccounts(db).map(a => ({

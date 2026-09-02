@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Modal, Form, Input, Select, Switch, Button, Space, Divider } from 'antd';
 import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import { api, TaskInput } from '../api';
 import type { TaskWithTargets } from '../../shared/types.js';
+import DirectoryPicker from './DirectoryPicker';
 
 export default function TaskFormModal({ open, accounts, task, onClose, onDone }: {
   open: boolean;
@@ -12,6 +13,8 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
   onDone: () => void;
 }) {
   const [form] = Form.useForm();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const localPath = Form.useWatch('localPath', form);
 
   useEffect(() => {
     if (!open) return;
@@ -49,8 +52,11 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
         <Form.Item name="name" label="任务名称" rules={[{ required: true }]}>
           <Input placeholder="例如：文档备份" />
         </Form.Item>
-        <Form.Item name="localPath" label="本地目录（绝对路径 / 容器内路径）" rules={[{ required: true }]}>
-          <Input placeholder="/path/to/local" />
+        <Form.Item label="本地目录（绝对路径 / 容器内路径）" required>
+          <Space.Compact style={{ width: '100%' }}>
+            <Form.Item name="localPath" noStyle rules={[{ required: true }]}><Input readOnly placeholder="请选择目录" /></Form.Item>
+            <Button onClick={() => setPickerOpen(true)}>选择目录</Button>
+          </Space.Compact>
         </Form.Item>
         <Form.Item name="schedule" label="调度（cron 表达式，留空为手动）">
           <Input placeholder="0 2 * * *" />
@@ -83,6 +89,7 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
           )}
         </Form.List>
       </Form>
+      <DirectoryPicker open={pickerOpen} initialPath={localPath} onClose={() => setPickerOpen(false)} onSelect={path => form.setFieldValue('localPath', path)} />
     </Modal>
   );
 }

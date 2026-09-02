@@ -30,6 +30,7 @@ export const api = {
   deleteTask: (id: string) => fetch(`/api/tasks/${id}`, { method: 'DELETE' }).then(r => j<any>(r)),
   runTask: (id: string) => fetch(`/api/tasks/${id}/run`, { method: 'POST' }).then(r => j<any>(r)),
   listRuns: (id: string) => fetch(`/api/tasks/${id}/runs`).then(r => j<any[]>(r)),
+  listDirectories: (path?: string) => fetch(`/api/filesystem/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`).then(r => j<{ path: string | null; parent: string | null; roots?: string[]; directories: { name: string; path: string }[] }>(r)),
   listAccounts: () => fetch('/api/accounts').then(r => j<any[]>(r)),
   deleteAccount: (id: string) => fetch(`/api/accounts/${id}`, { method: 'DELETE' }).then(r => j<any>(r)),
   getNotificationSettings: () => fetch('/api/settings/notifications').then(r => j<any>(r)),
