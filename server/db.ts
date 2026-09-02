@@ -45,6 +45,10 @@ export function migrate(db: Database.Database): void {
       message TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   if (!tableExists(db, 'tasks')) {
@@ -357,4 +361,12 @@ export function listLogs(
 export function latestLogId(db: Database.Database): number {
   const row = db.prepare(`SELECT MAX(id) AS id FROM logs`).get() as any;
   return row.id ?? 0;
+}
+
+export function getSetting(db: Database.Database, key: string): string | undefined {
+  return (db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as any)?.value;
+}
+
+export function setSetting(db: Database.Database, key: string, value: string): void {
+  db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
 }

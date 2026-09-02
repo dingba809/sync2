@@ -8,17 +8,22 @@ import {
   insertAccount, updateAccountCredential, listAccounts, deleteAccount,
   insertTask, updateTask, listTasks, deleteTask, getAccount, getTask,
   insertTarget, listTargets, deleteTarget,
-  insertRun, finishRun, listRuns, insertLog, listLogs, latestLogId,
+  insertRun, finishRun, listRuns, insertLog, listLogs, latestLogId, getSetting, setSetting,
   listSnapshots, upsertSnapshot, deleteSnapshot
 } from './db.js';
 import { runSync } from './engine/executor.js';
 import { createProvider } from './provider-factory.js';
 import { googleAuthUrl, exchangeCodeForToken } from './auth/google.js';
 import { getQrcodeToken, pollQrcode, getCookiesFromServiceTicket } from './auth/quark.js';
+import { sendSyncNotification, type NotificationConfig } from './notifications.js';
 
 export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg: Config, masterKey: Buffer, scheduler: Scheduler): void {
   const encodeCred = (c: unknown) => encrypt(JSON.stringify(c), masterKey);
   const decodeCred = (s: string) => JSON.parse(decrypt(s, masterKey));
+  const notificationConfig = (): NotificationConfig => {
+    const value = getSetting(db, 'notifications');
+    return value ? JSON.parse(decrypt(value, masterKey)) : { telegramEnabled: false, barkEnabled: false };
+  };
 
   const progressStore = new Map<string, TaskProgress>();
   const progressListeners = new Map<string, Set<(p: TaskProgress) => void>>();
@@ -110,6 +115,26 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   app.get('/api/accounts', async () => listAccounts(db).map(a => ({
     id: a.id, provider: a.provider, displayName: a.displayName
   })));
+
+  app.get('/api/settings/notifications', async () => {
+    const c = notificationConfig();
+    return { telegramEnabled: c.telegramEnabled, telegramConfigured: !!(c.telegramBotToken && c.telegramChatId), barkEnabled: c.barkEnabled, barkConfigured: !!(c.barkServerUrl && c.barkDeviceKey), barkServerUrl: c.barkServerUrl ?? '' };
+  });
+
+  app.put('/api/settings/notifications', async (req) => {
+    const body = req.body as any;
+    const previous = notificationConfig();
+    const next: NotificationConfig = {
+      telegramEnabled: !!body.telegramEnabled,
+      telegramBotToken: body.telegramBotToken || previous.telegramBotToken,
+      telegramChatId: body.telegramChatId || previous.telegramChatId,
+      barkEnabled: !!body.barkEnabled,
+      barkServerUrl: body.barkServerUrl || previous.barkServerUrl,
+      barkDeviceKey: body.barkDeviceKey || previous.barkDeviceKey
+    };
+    setSetting(db, 'notifications', encrypt(JSON.stringify(next), masterKey));
+    return { ok: true };
+  });
 
   app.delete('/api/accounts/:id', async (req) => {
     const { id } = req.params as any;
@@ -221,7 +246,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     if (running.has(taskId)) return;
     running.add(taskId);
     try {
-      const t = db.prepare(`SELECT id, local_path AS localPath FROM tasks WHERE id = ?`).get(taskId) as any;
+      const t = db.prepare(`SELECT id, name, local_path AS localPath FROM tasks WHERE id = ?`).get(taskId) as any;
       if (!t) return;
       const targets = listTargets(db, taskId);
       if (targets.length === 0) {
@@ -319,6 +344,11 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       progress.status = anyFailed ? 'failed' : 'success';
       publishProgress(taskId, progress);
       updateTask(db, taskId, { lastStatus: anyFailed ? 'failed' : 'success' });
+      await sendSyncNotification(notificationConfig(), {
+        taskName: t.name, status: anyFailed ? 'failed' : 'success',
+        uploadedCount: progress.targets.reduce((n, target) => n + target.uploadedCount, 0),
+        deletedCount: progress.targets.reduce((n, target) => n + target.deletedCount, 0)
+      }).catch(e => insertLog(db, taskId, 'error', `通知发送失败: ${(e as Error).message}`));
     } catch (e) {
       const msg = (e as Error).message;
       insertLog(db, taskId, 'error', `同步异常: ${msg}`);

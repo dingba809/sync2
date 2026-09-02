@@ -1,9 +1,10 @@
 import { Routes, Route, Link } from 'react-router-dom';
 import { Layout, Menu } from 'antd';
-import { CloudUploadOutlined, UserOutlined, FileTextOutlined } from '@ant-design/icons';
+import { CloudUploadOutlined, UserOutlined, FileTextOutlined, SettingOutlined } from '@ant-design/icons';
 import TasksPage from './pages/TasksPage';
 import AccountsPage from './pages/AccountsPage';
 import LogsPage from './pages/LogsPage';
+import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
   return (
@@ -20,6 +21,9 @@ export default function App() {
           <Menu.Item key="logs" icon={<FileTextOutlined />}>
             <Link to="/logs">日志</Link>
           </Menu.Item>
+          <Menu.Item key="settings" icon={<SettingOutlined />}>
+            <Link to="/settings">设置</Link>
+          </Menu.Item>
         </Menu>
       </Layout.Sider>
       <Layout.Content style={{ padding: 24 }}>
@@ -27,6 +31,7 @@ export default function App() {
           <Route path="/" element={<TasksPage />} />
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/logs" element={<LogsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </Layout.Content>
     </Layout>
