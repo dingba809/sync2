@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, listRuns } from './db.js';
+import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns } from './db.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -79,5 +79,14 @@ describe('db', () => {
     const runs = listRuns(db, id);
     expect(runs.length).toBe(1);
     expect(runs[0].targetId).toBe(tid);
+  });
+
+  it('returns the most recent completed sync time for a task', () => {
+    const id = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
+    const tid = insertTarget(db, { taskId: id, accountId: 'a', remotePath: '/r' });
+    const runId = insertRun(db, id, tid);
+    finishRun(db, runId, { status: 'success', uploadedCount: 0, deletedCount: 0, error: null });
+
+    expect(getTask(db, id)!.lastCompletedAt).toEqual(expect.any(Number));
   });
 });

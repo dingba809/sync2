@@ -187,7 +187,7 @@ export function deleteAccount(db: Database.Database, id: string): void {
 
 export function insertTask(
   db: Database.Database,
-  t: Omit<TaskRecord, 'id' | 'lastStatus'>
+  t: Omit<TaskRecord, 'id' | 'lastStatus' | 'lastCompletedAt'>
 ): string {
   const id = randomUUID();
   db.prepare(
@@ -214,7 +214,8 @@ export function updateTask(db: Database.Database, id: string, t: Partial<TaskRec
 
 export function getTask(db: Database.Database, id: string): TaskRecord | undefined {
   const row: any = db.prepare(
-    `SELECT id, name, local_path AS localPath, schedule, enabled, last_status AS lastStatus
+    `SELECT id, name, local_path AS localPath, schedule, enabled, last_status AS lastStatus,
+            (SELECT MAX(finished_at) FROM run_history WHERE task_id = tasks.id) AS lastCompletedAt
      FROM tasks WHERE id = ?`
   ).get(id);
   if (!row) return undefined;
@@ -223,7 +224,8 @@ export function getTask(db: Database.Database, id: string): TaskRecord | undefin
 
 export function listTasks(db: Database.Database): TaskRecord[] {
   return db.prepare(
-    `SELECT id, name, local_path AS localPath, schedule, enabled, last_status AS lastStatus
+    `SELECT id, name, local_path AS localPath, schedule, enabled, last_status AS lastStatus,
+            (SELECT MAX(finished_at) FROM run_history WHERE task_id = tasks.id) AS lastCompletedAt
      FROM tasks ORDER BY created_at`
   ).all().map((r: any) => ({ ...r, enabled: !!r.enabled }));
 }

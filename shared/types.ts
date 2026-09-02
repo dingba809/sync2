@@ -43,6 +43,7 @@ export interface TaskRecord {
   schedule: string | null;
   enabled: boolean;
   lastStatus: string | null;
+  lastCompletedAt: number | null;
 }
 
 export interface TaskTarget {

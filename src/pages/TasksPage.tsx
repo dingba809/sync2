@@ -45,6 +45,10 @@ export default function TasksPage() {
     { title: '目标数', render: (_: any, t: TaskWithTargets) => t.targets.length },
     { title: '调度', dataIndex: 'schedule', render: (s: string | null) => s ?? '手动' },
     {
+      title: '上次同步完成', dataIndex: 'lastCompletedAt',
+      render: (time: number | null) => time ? new Date(time).toLocaleString('zh-CN', { hour12: false }) : '—'
+    },
+    {
       title: '状态', dataIndex: 'lastStatus',
       render: (s: string | null) => {
         if (s === 'running') return <Tag icon={<SyncOutlined spin />} color="processing">同步中</Tag>;
