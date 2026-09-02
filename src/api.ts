@@ -1,4 +1,4 @@
-import type { TaskRecord } from '../shared/types.js';
+import type { TaskWithTargets, TaskProgress } from '../shared/types.js';
 
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -13,10 +13,20 @@ async function j<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface TaskInput {
+  name: string;
+  localPath: string;
+  schedule: string | null;
+  enabled: boolean;
+  targets: { accountId: string; remotePath: string }[];
+}
+
 export const api = {
-  listTasks: () => fetch('/api/tasks').then(r => j<TaskRecord[]>(r)),
-  createTask: (t: any) => fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) }).then(r => j<{ id: string }>(r)),
-  updateTask: (id: string, t: any) => fetch(`/api/tasks/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) }).then(r => j<any>(r)),
+  listTasks: () => fetch('/api/tasks').then(r => j<TaskWithTargets[]>(r)),
+  getTask: (id: string) => fetch(`/api/tasks/${id}`).then(r => j<TaskWithTargets>(r)),
+  createTask: (t: TaskInput) => fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) }).then(r => j<{ id: string }>(r)),
+  updateTask: (id: string, t: TaskInput) => fetch(`/api/tasks/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) }).then(r => j<any>(r)),
+  toggleTask: (id: string, enabled: boolean) => fetch(`/api/tasks/${id}/toggle`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }).then(r => j<any>(r)),
   deleteTask: (id: string) => fetch(`/api/tasks/${id}`, { method: 'DELETE' }).then(r => j<any>(r)),
   runTask: (id: string) => fetch(`/api/tasks/${id}/run`, { method: 'POST' }).then(r => j<any>(r)),
   listRuns: (id: string) => fetch(`/api/tasks/${id}/runs`).then(r => j<any[]>(r)),
@@ -25,5 +35,7 @@ export const api = {
   googleAuthUrl: () => fetch('/api/auth/google/url').then(r => j<{ url: string }>(r)),
   quarkStart: () => fetch('/api/auth/quark/start').then(r => j<{ token: string; url: string }>(r)),
   quarkPoll: (token: string) => fetch(`/api/auth/quark/poll?token=${token}`).then(r => j<any>(r)),
-  listLogs: (since: number, taskId?: string) => fetch(`/api/logs?since=${since}${taskId ? `&taskId=${taskId}` : ''}`).then(r => j<any[]>(r))
+  listLogs: (since: number, taskId?: string) => fetch(`/api/logs?since=${since}${taskId ? `&taskId=${taskId}` : ''}`).then(r => j<any[]>(r)),
+  getProgress: (id: string) => fetch(`/api/tasks/${id}/progress`).then(r => j<TaskProgress | null>(r)),
+  progressStreamUrl: (id: string) => `/api/tasks/${id}/progress/stream`
 };
