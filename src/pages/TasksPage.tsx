@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Card, Button, Switch, Space, Table, Tag, message, Popconfirm } from 'antd';
-import { PlusOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Card, Button, Switch, Space, Table, Tag, message, Popconfirm, Tooltip } from 'antd';
+import { PlusOutlined, PlayCircleOutlined, EditOutlined, EyeOutlined, SyncOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import TaskFormModal from '../components/TaskFormModal';
-import type { TaskRecord } from '../../shared/types.js';
+import TaskDetailDrawer from '../components/TaskDetailDrawer';
+import type { TaskWithTargets } from '../../shared/types.js';
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [tasks, setTasks] = useState<TaskWithTargets[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<TaskWithTargets | null>(null);
+  const [detail, setDetail] = useState<TaskWithTargets | null>(null);
 
   const load = async () => {
     setTasks(await api.listTasks());
@@ -17,8 +20,8 @@ export default function TasksPage() {
 
   useEffect(() => { load(); }, []);
 
-  const toggle = async (t: TaskRecord, enabled: boolean) => {
-    await api.updateTask(t.id, { enabled });
+  const toggle = async (t: TaskWithTargets, enabled: boolean) => {
+    await api.toggleTask(t.id, enabled);
     load();
   };
 
@@ -30,18 +33,25 @@ export default function TasksPage() {
   const columns = [
     { title: '名称', dataIndex: 'name' },
     { title: '本地目录', dataIndex: 'localPath' },
-    { title: '远程目录', dataIndex: 'remotePath' },
+    { title: '目标数', render: (_: any, t: TaskWithTargets) => t.targets.length },
     { title: '调度', dataIndex: 'schedule', render: (s: string | null) => s ?? '手动' },
     {
       title: '状态', dataIndex: 'lastStatus',
-      render: (s: string | null) => s ? <Tag color={s === 'success' ? 'green' : 'red'}>{s}</Tag> : <Tag>未运行</Tag>
+      render: (s: string | null) => {
+        if (s === 'running') return <Tag icon={<SyncOutlined spin />} color="processing">同步中</Tag>;
+        if (s === 'success') return <Tag color="green">成功</Tag>;
+        if (s === 'failed') return <Tag color="red">失败</Tag>;
+        return <Tag>未运行</Tag>;
+      }
     },
     {
       title: '操作',
-      render: (_: any, t: TaskRecord) => (
+      render: (_: any, t: TaskWithTargets) => (
         <Space>
           <Switch checked={t.enabled} onChange={(v) => toggle(t, v)} />
-          <Button icon={<PlayCircleOutlined />} onClick={() => run(t.id)}>同步</Button>
+          <Tooltip title="立即同步"><Button icon={<PlayCircleOutlined />} onClick={() => run(t.id)} /></Tooltip>
+          <Tooltip title="详情"><Button icon={<EyeOutlined />} onClick={() => setDetail(t)} /></Tooltip>
+          <Tooltip title="编辑"><Button icon={<EditOutlined />} onClick={() => { setEditing(t); setOpen(true); }} /></Tooltip>
           <Popconfirm title="删除该任务？" onConfirm={async () => { await api.deleteTask(t.id); load(); }}>
             <Button danger>删除</Button>
           </Popconfirm>
@@ -51,9 +61,12 @@ export default function TasksPage() {
   ];
 
   return (
-    <Card title="同步任务" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>新建任务</Button>}>
+    <Card title="同步任务" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); setOpen(true); }}>新建任务</Button>}>
       <Table rowKey="id" dataSource={tasks} columns={columns} pagination={false} />
-      <TaskFormModal open={open} accounts={accounts} onClose={() => setOpen(false)} onDone={() => { setOpen(false); load(); }} />
+      <TaskFormModal open={open} accounts={accounts} task={editing}
+        onClose={() => setOpen(false)}
+        onDone={() => { setOpen(false); setEditing(null); load(); }} />
+      <TaskDetailDrawer task={detail} onClose={() => setDetail(null)} />
     </Card>
   );
 }
