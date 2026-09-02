@@ -8,3 +8,4 @@ dist-server/
 data/
 .DS_Store
 drives.config.json
+.worktrees/
