@@ -7,7 +7,7 @@ await build({
   format: 'esm',
   target: 'node20',
   outfile: 'dist-server/index.js',
-  external: ['better-sqlite3'],
+  packages: 'external',
   sourcemap: false
 });
 console.log('server bundled');
