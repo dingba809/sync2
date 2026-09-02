@@ -17,6 +17,10 @@ export class TaskStatusPolling {
     }
   }
 
+  async refreshNow(): Promise<void> {
+    await this.reload();
+  }
+
   dispose(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;

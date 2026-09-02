@@ -18,4 +18,14 @@ describe('TaskStatusPolling', () => {
     expect(reload).toHaveBeenCalledTimes(3);
     polling.dispose();
   });
+
+  it('reloads immediately when requested after a manual run', async () => {
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const polling = new TaskStatusPolling(reload, 1000);
+
+    await polling.refreshNow();
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    polling.dispose();
+  });
 });
