@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { QuarkProvider } from './quark.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function mockCookies(): any { return { getCookies: () => ({ __uid: 'u' }) }; }
 
@@ -67,18 +70,19 @@ describe('QuarkProvider', () => {
       .rejects.toThrow('RequestTimeTooSkewed: clock skew');
   });
 
-  it('retries a part while Quark creates its hash context', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(okJson({ auth_key: 'first-signature' }))
-      .mockResolvedValueOnce(new Response('<Error><Code>NoHashContext</Code></Error>', { status: 400 }))
-      .mockResolvedValueOnce(okJson({ auth_key: 'second-signature' }))
-      .mockResolvedValueOnce(new Response('', { status: 200, headers: { etag: 'etag-1' } }));
+  it('uses serial multipart mode because parts are uploaded sequentially', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'quark-'));
+    const localPath = join(dir, 'file.txt');
+    writeFileSync(localPath, 'content');
+    const p = provider() as any;
+    const post = vi.spyOn(p, 'post')
+      .mockResolvedValueOnce({ task_id: 'task' })
+      .mockResolvedValueOnce({ finish: true });
+    vi.spyOn(p, 'findByName').mockResolvedValue({ id: 'file', name: 'file.txt', isDir: false, size: 7, mtime: 1 });
 
-    const etag = await (provider() as any).upPart({
-      bucket: 'bucket', obj_key: 'key', upload_id: 'upload', task_id: 'task', auth_info: 'auth'
-    }, 'application/octet-stream', 1, Buffer.from('x'), 'https://bucket.example.com/key');
+    await p.uploadFile(localPath, 'parent', 'file.txt');
 
-    expect(etag).toBe('etag-1');
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(post.mock.calls[0][1]).toMatchObject({ ccp_hash_update: true, parallel_upload: false });
+    rmSync(dir, { recursive: true, force: true });
   });
 });
