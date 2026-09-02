@@ -26,12 +26,14 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
         localPath: task.localPath,
         scheduleMode: scheduleModeFrom(task.schedule),
         dailyTime: dailyTimeFrom(task.schedule),
+        weekday: weeklyDayFrom(task.schedule),
+        monthDay: monthDayFrom(task.schedule),
         enabled: task.enabled,
         targets: task.targets.map(t => ({ accountId: t.accountId, remotePath: t.remotePath }))
       });
     } else {
       form.resetFields();
-      form.setFieldsValue({ enabled: true, targets: [], scheduleMode: 'manual', dailyTime: dayjs().hour(2).minute(0).second(0) });
+      form.setFieldsValue({ enabled: true, targets: [], scheduleMode: 'manual', dailyTime: dayjs().hour(2).minute(0).second(0), weekday: '1', monthDay: '1' });
     }
   }, [open, task, form]);
 
@@ -40,7 +42,7 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
     const input: TaskInput = {
       name: v.name,
       localPath: v.localPath,
-      schedule: scheduleFrom(v.scheduleMode, v.dailyTime),
+      schedule: scheduleFrom(v.scheduleMode, v.dailyTime, v.weekday, v.monthDay),
       enabled: v.enabled ?? true,
       targets: (v.targets ?? []).map((t: any) => ({ accountId: t.accountId, remotePath: t.remotePath }))
     };
@@ -64,13 +66,14 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
         <Form.Item name="scheduleMode" label="同步频率" initialValue="manual">
           <Select options={[
             { value: 'manual', label: '手动同步' },
-            { value: '15', label: '每 15 分钟' },
-            { value: '30', label: '每 30 分钟' },
-            { value: '60', label: '每小时' },
-            { value: 'daily', label: '每天' }
+            { value: 'daily', label: '每天' },
+            { value: 'weekly', label: '每周' },
+            { value: 'monthly', label: '每月' }
           ]} />
         </Form.Item>
-        {scheduleMode === 'daily' && <Form.Item name="dailyTime" label="每天执行时间"><TimePicker format="HH:mm" minuteStep={5} /></Form.Item>}
+        {scheduleMode !== 'manual' && <Form.Item name="dailyTime" label="执行时间"><TimePicker format="HH:mm" minuteStep={5} /></Form.Item>}
+        {scheduleMode === 'weekly' && <Form.Item name="weekday" label="每周执行日"><Select options={['周一', '周二', '周三', '周四', '周五', '周六', '周日'].map((label, index) => ({ label, value: String(index + 1) }))} /></Form.Item>}
+        {scheduleMode === 'monthly' && <Form.Item name="monthDay" label="每月执行日"><Select options={Array.from({ length: 31 }, (_, index) => ({ label: `${index + 1} 日`, value: String(index + 1) }))} /></Form.Item>}
         <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
           <Switch />
         </Form.Item>
@@ -106,8 +109,9 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
 
 function scheduleModeFrom(schedule: string | null): string {
   if (!schedule) return 'manual';
-  if (/^\d+$/.test(schedule) && ['15', '30', '60'].includes(schedule)) return schedule;
   if (/^\d+ \d+ \* \* \*$/.test(schedule)) return 'daily';
+  if (/^\d+ \d+ \* \* \d+$/.test(schedule)) return 'weekly';
+  if (/^\d+ \d+ \d+ \* \*$/.test(schedule)) return 'monthly';
   return 'manual';
 }
 
@@ -116,7 +120,17 @@ function dailyTimeFrom(schedule: string | null) {
   return dayjs().hour(Number(match?.[2] ?? 2)).minute(Number(match?.[1] ?? 0)).second(0);
 }
 
-function scheduleFrom(mode: string, time?: ReturnType<typeof dayjs>): string | null {
+function weeklyDayFrom(schedule: string | null): string {
+  return schedule?.match(/^\d+ \d+ \* \* (\d+)$/)?.[1] ?? '1';
+}
+
+function monthDayFrom(schedule: string | null): string {
+  return schedule?.match(/^\d+ \d+ (\d+) \* \*$/)?.[1] ?? '1';
+}
+
+function scheduleFrom(mode: string, time?: ReturnType<typeof dayjs>, weekday?: string, monthDay?: string): string | null {
   if (mode === 'daily') return `${time?.minute() ?? 0} ${time?.hour() ?? 2} * * *`;
+  if (mode === 'weekly') return `${time?.minute() ?? 0} ${time?.hour() ?? 2} * * ${weekday ?? 1}`;
+  if (mode === 'monthly') return `${time?.minute() ?? 0} ${time?.hour() ?? 2} ${monthDay ?? 1} * *`;
   return mode === 'manual' ? null : mode;
 }
