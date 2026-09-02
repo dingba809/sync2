@@ -86,7 +86,7 @@ export function migrate(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS run_history (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
-      target_id TEXT,
+      target_id TEXT NOT NULL,
       started_at INTEGER NOT NULL,
       finished_at INTEGER,
       status TEXT NOT NULL,
@@ -98,7 +98,7 @@ export function migrate(db: Database.Database): void {
 }
 
 function migrateOldTasks(db: Database.Database): void {
-  const old = db.prepare(`SELECT id, account_id, remote_path FROM tasks`).all() as any[];
+  const old = db.prepare(`SELECT id, account_id, remote_path FROM tasks WHERE account_id IS NOT NULL AND remote_path IS NOT NULL`).all() as any[];
   const ins = db.prepare(
     `INSERT INTO task_targets (id, task_id, account_id, remote_path, created_at) VALUES (?, ?, ?, ?, ?)`
   );
@@ -258,6 +258,7 @@ export function deleteTask(db: Database.Database, id: string): void {
   db.transaction(() => {
     deleteTargetsByTask(db, id);
     db.prepare(`DELETE FROM run_history WHERE task_id = ? AND target_id IS NULL`).run(id);
+    db.prepare(`DELETE FROM logs WHERE task_id = ?`).run(id);
     db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
   })();
 }
