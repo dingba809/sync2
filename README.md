@@ -63,6 +63,14 @@ docker compose up -d
 LOCAL_PATH=/你的/本地/目录 docker compose up -d
 ```
 
+夸克的大目录同步会在请求之间默认间隔 `75ms`，避免大量文件触发 OSS 限流。若网络环境仍出现限流，可在启动前适当调大间隔，例如：
+
+```bash
+QUARK_REQUEST_INTERVAL_MS=200 docker compose up -d
+```
+
+该变量仅影响夸克网盘请求，不影响 Google Drive。
+
 容器内端口默认 3000，仅映射到宿主机 `127.0.0.1`（不暴露公网）。任务里「本地目录」填容器内路径（如 `/backup`）。
 
 ## 🔑 配置
@@ -114,6 +122,7 @@ Bot Token、Chat ID 与 Bark Device Key 会通过 AES-256-GCM 加密后保存，
 | `GOOGLE_CLIENT_ID` | Google OAuth 客户端 ID（配置文件缺失时的回退） | 空 |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth 客户端密钥（配置文件缺失时的回退） | 空 |
 | `GOOGLE_REDIRECT_URI` | Google OAuth 回调地址（配置文件缺失时的回退） | `http://localhost:3000/api/auth/google/callback` |
+| `QUARK_REQUEST_INTERVAL_MS` | 夸克请求间隔（毫秒），用于大目录同步限流保护 | `75` |
 
 > 安全提示：默认只监听 `127.0.0.1`，请勿随意把 `HOST` 设为 `0.0.0.0` 暴露到公网。若确需远程访问，请务必放在反向代理 + 鉴权之后。
 

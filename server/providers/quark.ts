@@ -4,6 +4,7 @@ import { createReadStream, statSync } from 'node:fs';
 
 const BASE = 'https://drive-pc.quark.cn/1/clouddrive';
 const OSS_UA = 'aliyun-sdk-js/6.6.1 Chrome 98.0.4758.80 on Windows 10 64-bit';
+const LIST_PAGE_SIZE = 1000;
 
 function defParams(): URLSearchParams {
   return new URLSearchParams({
@@ -18,8 +19,12 @@ export interface QuarkCookieStore {
 
 export class QuarkProvider implements DriveProvider {
   readonly rootId = '0';
+  private lastRequestAt = 0;
 
-  constructor(private cookies: QuarkCookieStore) {}
+  constructor(
+    private cookies: QuarkCookieStore,
+    private readonly requestIntervalMs = Math.max(0, Number(process.env.QUARK_REQUEST_INTERVAL_MS ?? 75))
+  ) {}
 
   private headers(): Record<string, string> {
     const c = this.cookies.getCookies();
@@ -36,7 +41,7 @@ export class QuarkProvider implements DriveProvider {
   private async get(url: string, params: Record<string, string | number>): Promise<any> {
     const q = defParams();
     for (const [k, v] of Object.entries(params)) q.set(k, String(v));
-    const res = await fetch(`${url}?${q}`, { headers: this.headers() });
+    const res = await this.fetchWithPacing(`${url}?${q}`, { headers: this.headers() });
     if (!res.ok) throw new Error(`Quark ${url} HTTP ${res.status}`);
     const data = await res.json() as any;
     if (data.status !== 200 || data.code !== 0) throw new Error(`Quark ${url} code ${data.code}: ${data.message ?? ''}`);
@@ -45,7 +50,7 @@ export class QuarkProvider implements DriveProvider {
 
   private async post(url: string, body: unknown): Promise<any> {
     const q = defParams();
-    const res = await fetch(`${url}?${q}`, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });
+    const res = await this.fetchWithPacing(`${url}?${q}`, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`Quark ${url} HTTP ${res.status}`);
     const data = await res.json() as any;
     if (data.status !== 200 || data.code !== 0) throw new Error(`Quark ${url} code ${data.code}: ${data.message ?? ''}`);
@@ -53,18 +58,33 @@ export class QuarkProvider implements DriveProvider {
   }
 
   async listFolder(folderId: string): Promise<RemoteEntry[]> {
-    const data = await this.get(`${BASE}/file/sort`, {
-      pdir_fid: folderId, _page: 1, _size: 1000, _sort: 'file_name:asc',
-      _fetch_total: 1, _fetch_sub_dirs: 0
-    });
-    return (data.list ?? []).map((f: any) => ({
-      id: f.fid,
-      name: f.file_name,
-      isDir: !!f.dir,
-      size: Number(f.size ?? 0),
-      mtime: Number(f.updated_at ?? 0),
-      hash: f.sha1 || undefined
-    }));
+    const entries: RemoteEntry[] = [];
+    const seenIds = new Set<string>();
+    for (let page = 1; ; page++) {
+      const data = await this.get(`${BASE}/file/sort`, {
+        pdir_fid: folderId, _page: page, _size: LIST_PAGE_SIZE, _sort: 'file_name:asc',
+        _fetch_total: 1, _fetch_sub_dirs: 0
+      });
+      const list = data.list ?? [];
+      const entriesBefore = seenIds.size;
+      for (const f of list) {
+        if (seenIds.has(f.fid)) continue;
+        seenIds.add(f.fid);
+        entries.push({
+          id: f.fid,
+          name: f.file_name,
+          isDir: !!f.dir,
+          size: Number(f.size ?? 0),
+          mtime: Number(f.updated_at ?? 0),
+          hash: f.sha1 || undefined
+        });
+      }
+      if (
+        list.length < LIST_PAGE_SIZE ||
+        seenIds.size === entriesBefore ||
+        seenIds.size >= Number(data.total ?? data.total_count ?? Infinity)
+      ) return entries;
+    }
   }
 
   async ensureFolder(parentId: string, name: string): Promise<string> {
@@ -138,7 +158,7 @@ export class QuarkProvider implements DriveProvider {
       task_id: pre.task_id, auth_info: pre.auth_info, auth_meta: authMeta
     });
     const url = `${baseUrl}?partNumber=${partNumber}&uploadId=${pre.upload_id}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithPacing(url, {
       method: 'PUT',
       headers: {
         'Authorization': auth.auth_key,
@@ -149,7 +169,7 @@ export class QuarkProvider implements DriveProvider {
       },
       body: chunk
     });
-    if (res.status !== 200) throw new Error(`Quark part upload failed: ${res.status}`);
+    if (res.status !== 200) throw new Error(`Quark part upload failed: ${res.status}${await ossErrorDetail(res)}`);
     const etag = res.headers.get('etag');
     if (!etag) throw new Error(`Quark part upload missing ETag (part ${partNumber})`);
     return etag;
@@ -171,7 +191,7 @@ export class QuarkProvider implements DriveProvider {
       task_id: pre.task_id, auth_info: pre.auth_info, auth_meta: authMeta
     });
     const url = `${baseUrl}?uploadId=${pre.upload_id}`;
-    const res = await fetch(url, {
+    const res = await this.fetchWithPacing(url, {
       method: 'POST',
       headers: {
         'Authorization': auth.auth_key,
@@ -184,7 +204,7 @@ export class QuarkProvider implements DriveProvider {
       },
       body: xml
     });
-    if (res.status !== 200) throw new Error(`Quark commit failed: ${res.status}`);
+    if (res.status !== 200) throw new Error(`Quark commit failed: ${res.status}${await ossErrorDetail(res)}`);
   }
 
   async deleteEntry(id: string): Promise<void> {
@@ -195,6 +215,22 @@ export class QuarkProvider implements DriveProvider {
     const data = await this.get(`${BASE}/capacity`, {});
     return { total: Number(data.total_capacity ?? 0), used: Number(data.use_capacity ?? 0) };
   }
+
+  private async fetchWithPacing(url: string, init: RequestInit): Promise<Response> {
+    const wait = this.lastRequestAt + this.requestIntervalMs - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    this.lastRequestAt = Date.now();
+    return fetch(url, init);
+  }
+}
+
+async function ossErrorDetail(res: Response): Promise<string> {
+  const body = await res.text().catch(() => '');
+  const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1] ?? body.match(/"(?:code|Code)"\s*:\s*"?([^",}\s]+)/)?.[1];
+  const message = body.match(/<Message>([^<]+)<\/Message>/i)?.[1] ?? body.match(/"(?:message|Message)"\s*:\s*"([^"]+)/)?.[1];
+  if (code || message) return ` (${[code, message].filter(Boolean).join(': ')})`;
+  const compact = body.replace(/\s+/g, ' ').trim();
+  return compact ? ` (${compact.slice(0, 300)})` : '';
 }
 
 async function hashFile(path: string): Promise<{ md5: string; sha1: string }> {
