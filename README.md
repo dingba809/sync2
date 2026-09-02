@@ -10,6 +10,9 @@
 - **大文件友好**：Google Drive（resumable）与夸克（OSS 分片）均采用流式分片上传，不整读内存。
 - **多备份目标**：一个任务可同时备份到多个网盘（每个目标 = 账号 + 远程目录），互不干扰。
 - **实时进度**：同步时状态显示「同步中」，点开详情可看每个目标的上传/删除详细进度。
+- **同步状态与完成时间**：任务列表实时显示「同步中 / 成功 / 失败」和最近一次同步完成时间。
+- **日志筛选**：日志支持按任务和日期范围筛选，便于定位历史同步记录。
+- **完成通知**：可通过 Telegram 或 Bark 接收同步成功/失败、上传数与删除数摘要；密钥加密保存在本地。
 - **任务可编辑**：任务名、本地目录、调度、备份目标均可在界面随时增删改。
 - **多任务独立调度**：多个任务各自配置，支持手动触发或 cron 定时。
 - **凭据加密**：Google refresh_token / 夸克 Cookie 用 AES-256-GCM 加密后落盘，主密钥独立保存。
@@ -82,6 +85,15 @@ LOCAL_PATH=/你的/本地/目录 docker compose up -d
 
 > 兼容旧方式：未提供配置文件时，仍可用 `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` 环境变量。
 
+### 同步通知（Telegram / Bark）
+
+在网页侧边栏打开「设置」即可配置通知。两种渠道可以独立启用，保存后会在每个同步任务结束时发送成功或失败状态、上传文件数和删除文件数。
+
+- **Telegram**：填写 Bot Token 与接收消息的 Chat ID。
+- **Bark**：填写 Bark 服务器地址（官方服务为 `https://api.day.app`）和 Device Key。
+
+Bot Token、Chat ID 与 Bark Device Key 会通过 AES-256-GCM 加密后保存，不会在设置页面回显；重新保存时相应字段留空即可保留既有密钥。
+
 ### 环境变量总览
 
 | 变量 | 说明 | 默认值 |
@@ -101,6 +113,7 @@ LOCAL_PATH=/你的/本地/目录 docker compose up -d
 2. **新建同步任务**：填写任务名、本地目录（绝对路径）、调度（cron，留空为手动），并添加一个或多个备份目标（每个目标 = 网盘账号 + 远程目录）。
 3. **立即同步**：点任务行的「同步」按钮，状态列显示「同步中」；点「详情」可实时查看每个目标的上传/删除进度。
 4. **编辑任务**：点「编辑」随时修改任务名、目录、调度或增删备份目标。
+5. **设置通知**：在「设置」中启用并填写 Telegram 或 Bark 配置，任务完成时自动接收摘要。
 
 ## 📁 项目结构
 
@@ -113,6 +126,7 @@ sync2/
 │   ├── index.ts                 # 入口
 │   ├── config.ts                # 配置与主密钥管理
 │   ├── crypto.ts                # AES-256-GCM 加解密
+│   ├── notifications.ts          # Telegram / Bark 同步完成通知
 │   ├── db.ts                    # SQLite 数据层（含 task_targets 多目标）
 │   ├── scheduler.ts             # cron 定时调度
 │   ├── provider-factory.ts      # 网盘驱动工厂
@@ -123,7 +137,7 @@ sync2/
 ├── src/                         # 前端（React + Vite + Ant Design）
 │   ├── api.ts                   # API 客户端
 │   ├── App.tsx / main.tsx
-│   ├── pages/                   # 任务 / 账号 / 日志
+│   ├── pages/                   # 任务 / 账号 / 日志 / 设置
 │   └── components/              # 任务表单 / 任务详情 / 夸克扫码弹窗
 ├── Dockerfile / docker-compose.yml
 └── package.json / tsconfig.json / vite.config.ts / build-server.mjs
