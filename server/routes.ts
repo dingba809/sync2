@@ -26,6 +26,15 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     const value = getSetting(db, 'notifications');
     return value ? JSON.parse(decrypt(value, masterKey)) : { telegramEnabled: false, barkEnabled: false };
   };
+  const syncConfig = (): { quarkUploadConcurrency: number } => {
+    const raw = getSetting(db, 'sync');
+    try {
+      const value = raw ? Number(JSON.parse(raw).quarkUploadConcurrency) : 3;
+      return { quarkUploadConcurrency: Number.isInteger(value) ? Math.max(1, Math.min(6, value)) : 3 };
+    } catch {
+      return { quarkUploadConcurrency: 3 };
+    }
+  };
 
   const progressStore = new Map<string, TaskProgress>();
   const progressListeners = new Map<string, Set<(p: TaskProgress) => void>>();
@@ -165,6 +174,16 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     return { ok: true };
   });
 
+  app.get('/api/settings/sync', async () => syncConfig());
+  app.put('/api/settings/sync', async (req, reply) => {
+    const value = Number((req.body as any).quarkUploadConcurrency);
+    if (!Number.isInteger(value) || value < 1 || value > 6) {
+      return reply.code(400).send({ error: '夸克上传并发数必须在 1 到 6 之间' });
+    }
+    setSetting(db, 'sync', JSON.stringify({ quarkUploadConcurrency: value }));
+    return { ok: true };
+  });
+
   app.delete('/api/accounts/:id', async (req) => {
     const { id } = req.params as any;
     const tasks = db.prepare(`SELECT task_id AS id FROM task_targets WHERE account_id = ?`).all(id) as any[];
@@ -278,8 +297,10 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   async function runTaskById(taskId: string): Promise<void> {
     if (running.has(taskId)) return;
     running.add(taskId);
-    let release = () => {};
-    const control = { paused: false, stopped: false, runWindowEnabled: false, runWindowStart: null as string | null, runWindowEnd: null as string | null, resolve: () => release(), wait: async () => {
+    const waiters = new Set<() => void>();
+    const control = { paused: false, stopped: false, runWindowEnabled: false, runWindowStart: null as string | null, runWindowEnd: null as string | null, resolve: () => {
+      for (const wake of [...waiters]) wake();
+    }, wait: async () => {
       while (!control.stopped) {
         const inWindow = isWithinRunWindow(control.runWindowEnabled, control.runWindowStart, control.runWindowEnd);
         if (!control.paused && inWindow) {
@@ -288,9 +309,10 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
         }
         if (!control.paused) updateTask(db, taskId, { lastStatus: 'paused' });
         await new Promise<void>(resolve => {
-          release = resolve;
+          const wake = () => { waiters.delete(wake); resolve(); };
+          waiters.add(wake);
           if (!control.paused && control.runWindowEnabled && control.runWindowStart) {
-            setTimeout(resolve, millisecondsUntilRunWindow(control.runWindowStart));
+            setTimeout(wake, millisecondsUntilRunWindow(control.runWindowStart));
           }
         });
       }
@@ -325,6 +347,8 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
             currentFile: null,
             uploadedCount: 0,
             failedUploadCount: 0,
+            activeUploadCount: 0,
+            pendingUploadCount: 0,
             totalUpload: 0,
             deletedCount: 0,
             totalDelete: 0
@@ -379,12 +403,15 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
               tp.currentFile = p.currentFile;
               tp.uploadedCount = p.uploadedCount;
               tp.failedUploadCount = p.failedUploadCount;
+              tp.activeUploadCount = p.activeUploadCount;
+              tp.pendingUploadCount = p.pendingUploadCount;
               tp.totalUpload = p.totalUpload;
               tp.deletedCount = p.deletedCount;
               tp.totalDelete = p.totalDelete;
               publishProgress(taskId, progress);
             },
-            waitForResume: control.wait
+            waitForResume: control.wait,
+            uploadConcurrency: acc.provider === 'quark' ? syncConfig().quarkUploadConcurrency : 1
           });
           if (result.stopped) {
             tp.status = 'failed';

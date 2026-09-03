@@ -85,4 +85,23 @@ describe('QuarkProvider', () => {
     expect(post.mock.calls[0][1]).toMatchObject({ ccp_hash_update: true, parallel_upload: false });
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('uses the upload finish file id without listing the folder again', async () => {
+    const p = provider() as any;
+    expect(p.entryFromUploadResponse({ fid: 'new-file' }, 'file.txt', 7, 'hash')).toMatchObject({ id: 'new-file', name: 'file.txt', hash: 'hash' });
+  });
+
+  it('serializes request dispatch when uploads run concurrently', async () => {
+    const dispatchedAt: number[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      dispatchedAt.push(Date.now());
+      return okJson({});
+    });
+    const p = new QuarkProvider(mockCookies(), 20) as any;
+    await Promise.all([
+      p.fetchWithPacing('https://example.test/one', {}),
+      p.fetchWithPacing('https://example.test/two', {})
+    ]);
+    expect(dispatchedAt[1] - dispatchedAt[0]).toBeGreaterThanOrEqual(18);
+  });
 });

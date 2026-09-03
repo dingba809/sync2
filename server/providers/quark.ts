@@ -20,6 +20,7 @@ export interface QuarkCookieStore {
 export class QuarkProvider implements DriveProvider {
   readonly rootId = '0';
   private lastRequestAt = 0;
+  private requestTail: Promise<void> = Promise.resolve();
 
   constructor(
     private cookies: QuarkCookieStore,
@@ -116,7 +117,9 @@ export class QuarkProvider implements DriveProvider {
       task_id: pre.task_id, md5, sha1
     });
     if (hashRes?.finish === true) {
-      return await this.findByName(parentId, name, size, md5);
+      const entry = this.entryFromUploadResponse(hashRes, name, size, md5);
+      if (entry) return entry;
+      return await this.findByName(parentId, name);
     }
 
     const partSize: number = pre.metadata?.part_size || 4 * 1024 * 1024;
@@ -131,20 +134,23 @@ export class QuarkProvider implements DriveProvider {
     }
 
     await this.upCommit(pre, etags, baseUrl);
-    await this.post(`${BASE}/file/upload/finish`, { task_id: pre.task_id, obj_key: pre.obj_key });
+    const finish = await this.post(`${BASE}/file/upload/finish`, { task_id: pre.task_id, obj_key: pre.obj_key });
+    const entry = this.entryFromUploadResponse(finish, name, size, md5);
+    if (entry) return entry;
 
-    return await this.findByName(parentId, name, size, md5);
+    return await this.findByName(parentId, name);
   }
 
-  private async findByName(
-    parentId: string, name: string, size: number, md5: string
-  ): Promise<RemoteEntry> {
-    for (let i = 0; i < 5; i++) {
-      const list = await this.listFolder(parentId);
-      const found = list.find(e => !e.isDir && e.name === name);
-      if (found) return found;
-      await new Promise(r => setTimeout(r, 500));
-    }
+  private entryFromUploadResponse(data: any, name: string, size: number, hash: string): RemoteEntry | undefined {
+    const id = data?.fid ?? data?.file_id ?? data?.fileId ?? data?.file?.fid ?? data?.file?.id;
+    if (!id) return undefined;
+    return { id: String(id), name, isDir: false, size, mtime: Date.now(), hash };
+  }
+
+  private async findByName(parentId: string, name: string): Promise<RemoteEntry> {
+    const list = await this.listFolder(parentId);
+    const found = list.find(e => !e.isDir && e.name === name);
+    if (found) return found;
     throw new Error(`Quark upload completed but file not found in listing: ${name}`);
   }
 
@@ -219,9 +225,14 @@ export class QuarkProvider implements DriveProvider {
   }
 
   private async fetchWithPacing(url: string, init: RequestInit): Promise<Response> {
+    let release!: () => void;
+    const previous = this.requestTail;
+    this.requestTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
     const wait = this.lastRequestAt + this.requestIntervalMs - Date.now();
     if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
     this.lastRequestAt = Date.now();
+    release();
     return fetch(url, init);
   }
 }

@@ -79,6 +79,8 @@ export interface TargetProgress {
   currentFile: string | null;
   uploadedCount: number;
   failedUploadCount: number;
+  activeUploadCount: number;
+  pendingUploadCount: number;
   totalUpload: number;
   deletedCount: number;
   totalDelete: number;

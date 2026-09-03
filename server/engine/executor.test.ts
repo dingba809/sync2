@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runSync } from './executor.js';
-import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { DriveProvider, RemoteEntry } from '../../shared/types.js';
@@ -66,6 +66,43 @@ describe('runSync', () => {
 
     expect(result).toMatchObject({ uploadedCount: 0, deletedCount: 0, stopped: true });
     expect(remote.size).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('limits concurrent file uploads to the configured worker count', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-'));
+    for (let i = 0; i < 5; i++) writeFileSync(join(dir, `file-${i}.txt`), 'hello');
+    let active = 0;
+    let maxActive = 0;
+    const provider = fakeProvider(new Map());
+    provider.uploadFile = async (_local, _parent, name) => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise(resolve => setTimeout(resolve, 15));
+      active--;
+      return { id: name, name, isDir: false, size: 5, mtime: 1 };
+    };
+
+    const result = await runSync({
+      targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snapshots(), onLog: () => {}, uploadConcurrency: 3
+    });
+
+    expect(result.uploadedCount).toBe(5);
+    expect(maxActive).toBe(3);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('skips the remote inventory when snapshots already exist', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-'));
+    writeFileSync(join(dir, 'unchanged.txt'), 'hello');
+    const snap = snapshots();
+    snap.upsert('t', 'unchanged.txt', { size: 5, mtime: Math.floor(statSync(join(dir, 'unchanged.txt')).mtimeMs), hash: null, remoteId: 'id' });
+    const provider = fakeProvider(new Map());
+    const listFolder = vi.spyOn(provider, 'listFolder');
+
+    await runSync({ targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {} });
+
+    expect(listFolder).not.toHaveBeenCalled();
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -57,6 +57,9 @@ export default function TaskDetailDrawer({ task, onClose }: {
                   <div style={{ fontSize: 12, color: '#888' }}>
                     上传成功 {tp.uploadedCount}，失败 {tp.failedUploadCount}，待处理 {Math.max(0, tp.totalUpload - tp.uploadedCount - tp.failedUploadCount)} · 删除 {tp.deletedCount}/{tp.totalDelete}
                   </div>
+                  {tp.totalUpload > 0 && <div style={{ fontSize: 12, color: '#888' }}>
+                    上传队列：进行中 {tp.activeUploadCount}，等待中 {tp.pendingUploadCount}
+                  </div>}
                 </div>
               );
             })

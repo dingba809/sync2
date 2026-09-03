@@ -22,6 +22,8 @@ export interface ProgressInfo {
   currentFile: string | null;
   uploadedCount: number;
   failedUploadCount: number;
+  activeUploadCount: number;
+  pendingUploadCount: number;
   totalUpload: number;
   deletedCount: number;
   totalDelete: number;
@@ -36,17 +38,24 @@ export async function runSync(opts: {
   onLog: (level: 'info' | 'error', msg: string) => void;
   onProgress?: (p: ProgressInfo) => void;
   waitForResume?: () => Promise<boolean>;
+  uploadConcurrency?: number;
 }): Promise<RunResult> {
-  const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress, waitForResume } = opts;
+  const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress, waitForResume, uploadConcurrency = 1 } = opts;
 
   const st = statSync(localPath);
   if (!st.isDirectory()) throw new Error(`本地目录不存在或不是目录: ${localPath}`);
 
+  const scanStartedAt = Date.now();
   const localFiles = scanDirectory(localPath);
+  onLog('info', `本地扫描完成：${localFiles.size} 个文件，耗时 ${Date.now() - scanStartedAt}ms`);
   const snapshotMap = snapshots.list(targetId);
 
+  const remoteStartedAt = Date.now();
   const rootId = await resolveRemoteRoot(provider, remotePath);
-  const remoteEntries = await listRemoteRecursive(provider, rootId);
+  const remoteEntries = snapshotMap.size === 0 ? await listRemoteRecursive(provider, rootId) : new Map<string, RemoteEntry>();
+  onLog('info', snapshotMap.size === 0
+    ? `远端核对完成：${remoteEntries.size} 个文件，耗时 ${Date.now() - remoteStartedAt}ms`
+    : `使用本地快照增量同步，跳过远端完整核对`);
   const remoteRefs = new Map<string, { id: string; size: number; hash?: string }>();
   for (const [rel, e] of remoteEntries) {
     remoteRefs.set(rel, { id: e.id, size: e.size, hash: e.hash });
@@ -59,31 +68,40 @@ export async function runSync(opts: {
   let deletedCount = 0;
   let error: string | null = null;
   let currentFile: string | null = null;
+  let activeUploadCount = 0;
+  let pendingUploadCount = 0;
 
   const totalUpload = plan.toUpload.length;
   const totalDelete = plan.toDelete.length;
-  const report = () => onProgress?.({ currentFile, uploadedCount, failedUploadCount, totalUpload, deletedCount, totalDelete });
+  const report = () => onProgress?.({ currentFile, uploadedCount, failedUploadCount, activeUploadCount, pendingUploadCount, totalUpload, deletedCount, totalDelete });
   report();
 
-  const folderCache = new Map<string, string>();
-  folderCache.set('', rootId);
+  const folderCache = new Map<string, Promise<string>>();
+  folderCache.set('', Promise.resolve(rootId));
 
-  async function parentFor(relPath: string): Promise<string> {
-    const dir = posix.dirname(relPath);
-    if (dir === '.') return rootId;
-    if (folderCache.has(dir)) return folderCache.get(dir)!;
-    const parts = dir.split('/');
-    let cur = rootId;
-    for (const p of parts) {
-      cur = await provider.ensureFolder(cur, p);
-    }
-    folderCache.set(dir, cur);
-    return cur;
+  async function folderFor(dir: string): Promise<string> {
+    if (!dir || dir === '.') return rootId;
+    const cached = folderCache.get(dir);
+    if (cached) return cached;
+    const parentDir = posix.dirname(dir);
+    const promise = folderFor(parentDir === '.' ? '' : parentDir)
+      .then(parentId => provider.ensureFolder(parentId, posix.basename(dir)));
+    folderCache.set(dir, promise);
+    return promise;
   }
 
-  for (const relPath of plan.toUpload) {
-    if (waitForResume && !await waitForResume()) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
+  function parentFor(relPath: string): Promise<string> {
+    const dir = posix.dirname(relPath);
+    return folderFor(dir === '.' ? '' : dir);
+  }
+
+  let stopped = false;
+  pendingUploadCount = plan.toUpload.length;
+  const uploadOne = async (relPath: string): Promise<void> => {
     currentFile = relPath;
+    activeUploadCount++;
+    pendingUploadCount--;
+    report();
     try {
       const local = localFiles.get(relPath)!;
       const parentId = await parentFor(relPath);
@@ -98,14 +116,27 @@ export async function runSync(opts: {
       }
       uploadedCount++;
       onLog('info', `上传 ${relPath}`);
-      report();
     } catch (e) {
       error = (e as Error).message;
       failedUploadCount++;
       onLog('error', `上传失败 ${relPath}: ${error}`);
+    } finally {
+      activeUploadCount--;
       report();
     }
-  }
+  };
+
+  let nextUpload = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(6, uploadConcurrency, plan.toUpload.length || 1)) }, async () => {
+    while (!stopped) {
+      if (waitForResume && !await waitForResume()) { stopped = true; return; }
+      const relPath = plan.toUpload[nextUpload++];
+      if (!relPath) return;
+      await uploadOne(relPath);
+    }
+  });
+  await Promise.all(workers);
+  if (stopped) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
 
   for (const del of plan.toDelete) {
     if (waitForResume && !await waitForResume()) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
