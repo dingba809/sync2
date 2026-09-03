@@ -12,6 +12,7 @@ export interface SnapshotStore {
 
 export interface RunResult {
   uploadedCount: number;
+  failedUploadCount: number;
   deletedCount: number;
   error: string | null;
   stopped: boolean;
@@ -20,6 +21,7 @@ export interface RunResult {
 export interface ProgressInfo {
   currentFile: string | null;
   uploadedCount: number;
+  failedUploadCount: number;
   totalUpload: number;
   deletedCount: number;
   totalDelete: number;
@@ -53,13 +55,14 @@ export async function runSync(opts: {
   const plan = planSync(localFiles, snapshotMap, remoteRefs);
 
   let uploadedCount = 0;
+  let failedUploadCount = 0;
   let deletedCount = 0;
   let error: string | null = null;
   let currentFile: string | null = null;
 
   const totalUpload = plan.toUpload.length;
   const totalDelete = plan.toDelete.length;
-  const report = () => onProgress?.({ currentFile, uploadedCount, totalUpload, deletedCount, totalDelete });
+  const report = () => onProgress?.({ currentFile, uploadedCount, failedUploadCount, totalUpload, deletedCount, totalDelete });
   report();
 
   const folderCache = new Map<string, string>();
@@ -79,7 +82,7 @@ export async function runSync(opts: {
   }
 
   for (const relPath of plan.toUpload) {
-    if (waitForResume && !await waitForResume()) return { uploadedCount, deletedCount, error, stopped: true };
+    if (waitForResume && !await waitForResume()) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
     currentFile = relPath;
     try {
       const local = localFiles.get(relPath)!;
@@ -98,13 +101,14 @@ export async function runSync(opts: {
       report();
     } catch (e) {
       error = (e as Error).message;
+      failedUploadCount++;
       onLog('error', `上传失败 ${relPath}: ${error}`);
       report();
     }
   }
 
   for (const del of plan.toDelete) {
-    if (waitForResume && !await waitForResume()) return { uploadedCount, deletedCount, error, stopped: true };
+    if (waitForResume && !await waitForResume()) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
     currentFile = del.relPath;
     try {
       await withRetry(() => provider.deleteEntry(del.remoteId));
@@ -119,7 +123,7 @@ export async function runSync(opts: {
     }
   }
 
-  return { uploadedCount, deletedCount, error, stopped: false };
+  return { uploadedCount, failedUploadCount, deletedCount, error, stopped: false };
 }
 
 async function withRetry<T>(fn: () => Promise<T>, times = 3): Promise<T> {

@@ -18,6 +18,9 @@ export interface TaskInput {
   localPath: string;
   schedule: string | null;
   enabled: boolean;
+  runWindowEnabled: boolean;
+  runWindowStart: string | null;
+  runWindowEnd: string | null;
   targets: { accountId: string; remotePath: string }[];
 }
 

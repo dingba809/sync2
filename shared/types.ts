@@ -42,6 +42,9 @@ export interface TaskRecord {
   localPath: string;
   schedule: string | null;
   enabled: boolean;
+  runWindowEnabled: boolean;
+  runWindowStart: string | null;
+  runWindowEnd: string | null;
   lastStatus: string | null;
   lastCompletedAt: number | null;
 }
@@ -75,6 +78,7 @@ export interface TargetProgress {
   status: 'pending' | 'running' | 'success' | 'failed';
   currentFile: string | null;
   uploadedCount: number;
+  failedUploadCount: number;
   totalUpload: number;
   deletedCount: number;
   totalDelete: number;

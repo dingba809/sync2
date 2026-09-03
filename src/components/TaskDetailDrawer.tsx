@@ -36,6 +36,7 @@ export default function TaskDetailDrawer({ task, onClose }: {
           <Descriptions column={1} bordered size="small">
             <Descriptions.Item label="本地目录">{task.localPath}</Descriptions.Item>
             <Descriptions.Item label="调度">{task.schedule ?? '手动'}</Descriptions.Item>
+            <Descriptions.Item label="运行时间">{task.runWindowEnabled ? `${task.runWindowStart} - ${task.runWindowEnd}` : '不限'}</Descriptions.Item>
             <Descriptions.Item label="状态">{statusTag(task.lastStatus ?? '')}</Descriptions.Item>
           </Descriptions>
 
@@ -54,7 +55,7 @@ export default function TaskDetailDrawer({ task, onClose }: {
                   <Progress percent={percent} size="small" style={{ marginTop: 8 }} />
                   {tp.currentFile && <div style={{ fontSize: 12, color: '#888' }}>当前：{tp.currentFile}</div>}
                   <div style={{ fontSize: 12, color: '#888' }}>
-                    上传 {tp.uploadedCount}/{tp.totalUpload} · 删除 {tp.deletedCount}/{tp.totalDelete}
+                    上传成功 {tp.uploadedCount}，失败 {tp.failedUploadCount}，待处理 {Math.max(0, tp.totalUpload - tp.uploadedCount - tp.failedUploadCount)} · 删除 {tp.deletedCount}/{tp.totalDelete}
                   </div>
                 </div>
               );

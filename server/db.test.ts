@@ -31,6 +31,11 @@ describe('db', () => {
     expect(tasks.find(t => t.name === 'a')!.enabled).toBe(true);
   });
 
+  it('persists a task run window', () => {
+    const id = insertTask(db, { name: 'window', localPath: '/l', schedule: null, enabled: true, runWindowEnabled: true, runWindowStart: '09:00', runWindowEnd: '18:00' });
+    expect(getTask(db, id)).toMatchObject({ runWindowEnabled: true, runWindowStart: '09:00', runWindowEnd: '18:00' });
+  });
+
   it('deletes task cascades snapshots', () => {
     const id = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
     const tid = insertTarget(db, { taskId: id, accountId: 'a', remotePath: '/r' });
@@ -112,5 +117,11 @@ describe('db', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('lists the newest logs first', () => {
+    insertLog(db, null, 'info', 'first');
+    insertLog(db, null, 'info', 'second');
+    expect(listLogs(db, null, 0).map(row => row.message)).toEqual(['second', 'first']);
   });
 });

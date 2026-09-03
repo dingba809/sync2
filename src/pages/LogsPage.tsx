@@ -16,13 +16,13 @@ export default function LogsPage() {
     lastId.current = 0;
     api.listLogs(0, taskId, dateRange?.[0], dateRange?.[1]).then(rows => {
       setLogs(rows);
-      lastId.current = rows.length ? rows[rows.length - 1].id : 0;
+      lastId.current = rows.length ? rows[0].id : 0;
     });
     const timer = setInterval(async () => {
       const rows = await api.listLogs(lastId.current, taskId, dateRange?.[0], dateRange?.[1]);
       if (rows.length) {
-        setLogs(prev => [...prev, ...rows]);
-        lastId.current = rows[rows.length - 1].id;
+        setLogs(prev => [...rows, ...prev]);
+        lastId.current = rows[0].id;
       }
     }, 2000);
     return () => clearInterval(timer);

@@ -17,6 +17,7 @@ import { googleAuthUrl, exchangeCodeForToken } from './auth/google.js';
 import { getQrcodeToken, pollQrcode, getCookiesFromServiceTicket } from './auth/quark.js';
 import { sendSyncNotification, type NotificationConfig } from './notifications.js';
 import { listDirectories } from './filesystem.js';
+import { isWithinRunWindow, millisecondsUntilRunWindow } from './run-window.js';
 
 export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg: Config, masterKey: Buffer, scheduler: Scheduler): void {
   const encodeCred = (c: unknown) => encrypt(JSON.stringify(c), masterKey);
@@ -50,7 +51,8 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     const body = req.body as any;
     const id = insertTask(db, {
       name: body.name, localPath: body.localPath,
-      schedule: body.schedule ?? null, enabled: body.enabled ?? true
+      schedule: body.schedule ?? null, enabled: body.enabled ?? true,
+      runWindowEnabled: !!body.runWindowEnabled, runWindowStart: body.runWindowStart ?? null, runWindowEnd: body.runWindowEnd ?? null
     });
     for (const tg of body.targets ?? []) {
       insertTarget(db, { taskId: id, accountId: tg.accountId, remotePath: tg.remotePath });
@@ -64,7 +66,8 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     const body = req.body as any;
     updateTask(db, id, {
       name: body.name, localPath: body.localPath,
-      schedule: body.schedule ?? null, enabled: body.enabled ?? true
+      schedule: body.schedule ?? null, enabled: body.enabled ?? true,
+      runWindowEnabled: !!body.runWindowEnabled, runWindowStart: body.runWindowStart ?? null, runWindowEnd: body.runWindowEnd ?? null
     });
     if (Array.isArray(body.targets)) {
       const oldTargets = listTargets(db, id);
@@ -110,7 +113,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
 
   app.post('/api/tasks/:id/pause', async (req) => {
     const control = controls.get((req.params as any).id);
-    if (control) { control.paused = true; updateTask(db, (req.params as any).id, { lastStatus: 'paused' }); }
+    if (control) { control.paused = true; control.resolve(); updateTask(db, (req.params as any).id, { lastStatus: 'paused' }); }
     return { ok: !!control };
   });
   app.post('/api/tasks/:id/resume', async (req) => {
@@ -232,7 +235,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     let lastId = latestLogId(db);
     const timer = setInterval(() => {
       const rows = listLogs(db, taskId, lastId);
-      for (const r of rows) {
+      for (const r of [...rows].reverse()) {
         lastId = r.id;
         reply.raw.write(`data: ${JSON.stringify(r)}\n\n`);
       }
@@ -261,7 +264,10 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   });
 
   const running = new Set<string>();
-  const controls = new Map<string, { paused: boolean; stopped: boolean; resolve: () => void; wait: () => Promise<boolean> }>();
+  const controls = new Map<string, {
+    paused: boolean; stopped: boolean; runWindowEnabled: boolean; runWindowStart: string | null; runWindowEnd: string | null;
+    resolve: () => void; wait: () => Promise<boolean>
+  }>();
 
   function reschedule(taskId: string): void {
     const t = db.prepare(`SELECT id, schedule, enabled FROM tasks WHERE id = ?`).get(taskId) as any;
@@ -273,14 +279,30 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     if (running.has(taskId)) return;
     running.add(taskId);
     let release = () => {};
-    const control = { paused: false, stopped: false, resolve: () => release(), wait: async () => {
-      while (control.paused && !control.stopped) await new Promise<void>(resolve => { release = resolve; });
-      return !control.stopped;
+    const control = { paused: false, stopped: false, runWindowEnabled: false, runWindowStart: null as string | null, runWindowEnd: null as string | null, resolve: () => release(), wait: async () => {
+      while (!control.stopped) {
+        const inWindow = isWithinRunWindow(control.runWindowEnabled, control.runWindowStart, control.runWindowEnd);
+        if (!control.paused && inWindow) {
+          updateTask(db, taskId, { lastStatus: 'running' });
+          return true;
+        }
+        if (!control.paused) updateTask(db, taskId, { lastStatus: 'paused' });
+        await new Promise<void>(resolve => {
+          release = resolve;
+          if (!control.paused && control.runWindowEnabled && control.runWindowStart) {
+            setTimeout(resolve, millisecondsUntilRunWindow(control.runWindowStart));
+          }
+        });
+      }
+      return false;
     }};
     controls.set(taskId, control);
     try {
-      const t = db.prepare(`SELECT id, name, local_path AS localPath FROM tasks WHERE id = ?`).get(taskId) as any;
+      const t = db.prepare(`SELECT id, name, local_path AS localPath, run_window_enabled AS runWindowEnabled, run_window_start AS runWindowStart, run_window_end AS runWindowEnd FROM tasks WHERE id = ?`).get(taskId) as any;
       if (!t) return;
+      control.runWindowEnabled = !!t.runWindowEnabled;
+      control.runWindowStart = t.runWindowStart;
+      control.runWindowEnd = t.runWindowEnd;
       const targets = listTargets(db, taskId);
       if (targets.length === 0) {
         insertLog(db, taskId, 'error', '任务没有备份目标');
@@ -302,6 +324,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
             status: 'pending',
             currentFile: null,
             uploadedCount: 0,
+            failedUploadCount: 0,
             totalUpload: 0,
             deletedCount: 0,
             totalDelete: 0
@@ -355,6 +378,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
             onProgress: (p) => {
               tp.currentFile = p.currentFile;
               tp.uploadedCount = p.uploadedCount;
+              tp.failedUploadCount = p.failedUploadCount;
               tp.totalUpload = p.totalUpload;
               tp.deletedCount = p.deletedCount;
               tp.totalDelete = p.totalDelete;

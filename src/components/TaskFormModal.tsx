@@ -17,6 +17,7 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
   const [pickerOpen, setPickerOpen] = useState(false);
   const localPath = Form.useWatch('localPath', form);
   const scheduleMode = Form.useWatch('scheduleMode', form);
+  const runWindowEnabled = Form.useWatch('runWindowEnabled', form);
 
   useEffect(() => {
     if (!open) return;
@@ -29,11 +30,13 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
         weekday: weeklyDayFrom(task.schedule),
         monthDay: monthDayFrom(task.schedule),
         enabled: task.enabled,
+        runWindowEnabled: task.runWindowEnabled,
+        runWindow: task.runWindowStart && task.runWindowEnd ? [dayjs(task.runWindowStart, 'HH:mm'), dayjs(task.runWindowEnd, 'HH:mm')] : undefined,
         targets: task.targets.map(t => ({ accountId: t.accountId, remotePath: t.remotePath }))
       });
     } else {
       form.resetFields();
-      form.setFieldsValue({ enabled: true, targets: [], scheduleMode: 'manual', dailyTime: dayjs().hour(2).minute(0).second(0), weekday: '1', monthDay: '1' });
+      form.setFieldsValue({ enabled: true, targets: [], scheduleMode: 'manual', dailyTime: dayjs().hour(2).minute(0).second(0), weekday: '1', monthDay: '1', runWindowEnabled: false });
     }
   }, [open, task, form]);
 
@@ -44,6 +47,9 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
       localPath: v.localPath,
       schedule: scheduleFrom(v.scheduleMode, v.dailyTime, v.weekday, v.monthDay),
       enabled: v.enabled ?? true,
+      runWindowEnabled: !!v.runWindowEnabled,
+      runWindowStart: v.runWindowEnabled ? v.runWindow?.[0]?.format('HH:mm') ?? null : null,
+      runWindowEnd: v.runWindowEnabled ? v.runWindow?.[1]?.format('HH:mm') ?? null : null,
       targets: (v.targets ?? []).map((t: any) => ({ accountId: t.accountId, remotePath: t.remotePath }))
     };
     if (task) await api.updateTask(task.id, input);
@@ -77,6 +83,14 @@ export default function TaskFormModal({ open, accounts, task, onClose, onDone }:
         <Form.Item name="enabled" label="启用" valuePropName="checked" initialValue={true}>
           <Switch />
         </Form.Item>
+        <Form.Item name="runWindowEnabled" label="启用任务运行时间" valuePropName="checked" initialValue={false}>
+          <Switch />
+        </Form.Item>
+        {runWindowEnabled && <Form.Item name="runWindow" label="允许运行时间" rules={[{ required: true, message: '请选择开始和结束时间' }, { validator: async (_, value) => {
+          if (value?.[0]?.format('HH:mm') === value?.[1]?.format('HH:mm')) throw new Error('开始和结束时间不能相同');
+        }}]}>
+          <TimePicker.RangePicker format="HH:mm" minuteStep={5} />
+        </Form.Item>}
 
         <Divider>备份目标</Divider>
         <Form.List name="targets" rules={[{ validator: async (_, targets) => { if (!targets || targets.length < 1) throw new Error('至少添加一个备份目标'); } }]}>

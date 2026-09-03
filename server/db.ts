@@ -59,6 +59,9 @@ export function migrate(db: Database.Database): void {
         local_path TEXT NOT NULL,
         schedule TEXT,
         enabled INTEGER NOT NULL DEFAULT 1,
+        run_window_enabled INTEGER NOT NULL DEFAULT 0,
+        run_window_start TEXT,
+        run_window_end TEXT,
         last_status TEXT,
         created_at INTEGER NOT NULL
       );
@@ -66,6 +69,10 @@ export function migrate(db: Database.Database): void {
   } else if (columns(db, 'tasks').includes('account_id')) {
     migrateOldTasks(db);
   }
+  const taskColumns = columns(db, 'tasks');
+  if (!taskColumns.includes('run_window_enabled')) db.exec(`ALTER TABLE tasks ADD COLUMN run_window_enabled INTEGER NOT NULL DEFAULT 0`);
+  if (!taskColumns.includes('run_window_start')) db.exec(`ALTER TABLE tasks ADD COLUMN run_window_start TEXT`);
+  if (!taskColumns.includes('run_window_end')) db.exec(`ALTER TABLE tasks ADD COLUMN run_window_end TEXT`);
 
   if (tableExists(db, 'file_snapshots') && columns(db, 'file_snapshots').includes('task_id')) {
     db.exec(`DROP TABLE file_snapshots`);
@@ -117,6 +124,9 @@ function migrateOldTasks(db: Database.Database): void {
       local_path TEXT NOT NULL,
       schedule TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
+      run_window_enabled INTEGER NOT NULL DEFAULT 0,
+      run_window_start TEXT,
+      run_window_end TEXT,
       last_status TEXT,
       created_at INTEGER NOT NULL
     );
@@ -191,13 +201,14 @@ export function deleteAccount(db: Database.Database, id: string): void {
 
 export function insertTask(
   db: Database.Database,
-  t: Omit<TaskRecord, 'id' | 'lastStatus' | 'lastCompletedAt'>
+  t: Omit<TaskRecord, 'id' | 'lastStatus' | 'lastCompletedAt' | 'runWindowEnabled' | 'runWindowStart' | 'runWindowEnd'>
+    & Partial<Pick<TaskRecord, 'runWindowEnabled' | 'runWindowStart' | 'runWindowEnd'>>
 ): string {
   const id = randomUUID();
   db.prepare(
-    `INSERT INTO tasks (id, name, local_path, schedule, enabled, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, t.name, t.localPath, t.schedule, t.enabled ? 1 : 0, Date.now());
+    `INSERT INTO tasks (id, name, local_path, schedule, enabled, run_window_enabled, run_window_start, run_window_end, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, t.name, t.localPath, t.schedule, t.enabled ? 1 : 0, t.runWindowEnabled ? 1 : 0, t.runWindowStart ?? null, t.runWindowEnd ?? null, Date.now());
   return id;
 }
 
@@ -205,11 +216,12 @@ export function updateTask(db: Database.Database, id: string, t: Partial<TaskRec
   const fields: string[] = [];
   const vals: unknown[] = [];
   const map: Record<string, string> = {
-    name: 'name', localPath: 'local_path', schedule: 'schedule', lastStatus: 'last_status'
+    name: 'name', localPath: 'local_path', schedule: 'schedule', lastStatus: 'last_status',
+    runWindowEnabled: 'run_window_enabled', runWindowStart: 'run_window_start', runWindowEnd: 'run_window_end'
   };
   for (const [k, v] of Object.entries(t)) {
     if (k === 'enabled') { fields.push('enabled = ?'); vals.push(v ? 1 : 0); }
-    else if (map[k] && v !== undefined) { fields.push(`${map[k]} = ?`); vals.push(v); }
+    else if (map[k] && v !== undefined) { fields.push(`${map[k]} = ?`); vals.push(k === 'runWindowEnabled' ? (v ? 1 : 0) : v); }
   }
   if (fields.length === 0) return;
   vals.push(id);
@@ -218,20 +230,20 @@ export function updateTask(db: Database.Database, id: string, t: Partial<TaskRec
 
 export function getTask(db: Database.Database, id: string): TaskRecord | undefined {
   const row: any = db.prepare(
-    `SELECT id, name, local_path AS localPath, schedule, enabled, last_status AS lastStatus,
+    `SELECT id, name, local_path AS localPath, schedule, enabled, run_window_enabled AS runWindowEnabled, run_window_start AS runWindowStart, run_window_end AS runWindowEnd, last_status AS lastStatus,
             (SELECT MAX(finished_at) FROM run_history WHERE task_id = tasks.id) AS lastCompletedAt
      FROM tasks WHERE id = ?`
   ).get(id);
   if (!row) return undefined;
-  return { ...row, enabled: !!row.enabled };
+  return { ...row, enabled: !!row.enabled, runWindowEnabled: !!row.runWindowEnabled };
 }
 
 export function listTasks(db: Database.Database): TaskRecord[] {
   return db.prepare(
-    `SELECT id, name, local_path AS localPath, schedule, enabled, last_status AS lastStatus,
+    `SELECT id, name, local_path AS localPath, schedule, enabled, run_window_enabled AS runWindowEnabled, run_window_start AS runWindowStart, run_window_end AS runWindowEnd, last_status AS lastStatus,
             (SELECT MAX(finished_at) FROM run_history WHERE task_id = tasks.id) AS lastCompletedAt
      FROM tasks ORDER BY created_at`
-  ).all().map((r: any) => ({ ...r, enabled: !!r.enabled }));
+  ).all().map((r: any) => ({ ...r, enabled: !!r.enabled, runWindowEnabled: !!r.runWindowEnabled }));
 }
 
 export function insertTarget(
@@ -354,7 +366,7 @@ export function listLogs(
   if (to !== undefined) { where.push('created_at < ?'); params.push(to); }
   return db.prepare(
     `SELECT id, task_id AS taskId, level, message, created_at AS createdAt
-     FROM logs WHERE ${where.join(' AND ')} ORDER BY id LIMIT 500`
+     FROM logs WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT 500`
   ).all(...params) as any;
 }
 
