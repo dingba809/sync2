@@ -122,6 +122,7 @@ Bot Token、Chat ID 与 Bark Device Key 会通过 AES-256-GCM 加密后保存，
 |------|------|--------|
 | `PORT` | 监听端口 | `3000` |
 | `HOST` | 监听地址 | `127.0.0.1`（仅本机访问） |
+| `TZ` | 计划任务与任务运行时间窗使用的 IANA 时区；Docker 部署默认使用中国标准时间，可设为如 `America/New_York` | `Asia/Shanghai` |
 | `DATA_DIR` | 数据目录（SQLite、主密钥） | `./data` |
 | `GOOGLE_CLIENT_ID` | Google OAuth 客户端 ID（配置文件缺失时的回退） | 空 |
 | `GOOGLE_CLIENT_SECRET` | Google OAuth 客户端密钥（配置文件缺失时的回退） | 空 |

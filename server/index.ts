@@ -9,7 +9,7 @@ import { createScheduler } from './scheduler.js';
 const cfg = loadConfig();
 const db = openDb(join(cfg.dataDir, 'sync2.db'));
 const masterKey = getMasterKey(cfg.dataDir);
-const scheduler = createScheduler();
+const scheduler = createScheduler(cfg.timezone);
 
 const app = Fastify({ logger: true });
 registerRoutes(app, db, cfg, masterKey, scheduler);

@@ -6,9 +6,20 @@ export interface Config {
   dataDir: string;
   port: number;
   host: string;
+  timezone: string;
   googleClientId: string;
   googleClientSecret: string;
   googleRedirectUri: string;
+}
+
+function configuredTimezone(value: string | undefined): string {
+  const timezone = value || 'Asia/Shanghai';
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+    return timezone;
+  } catch {
+    return 'Asia/Shanghai';
+  }
 }
 
 interface DriveConfigFile {
@@ -39,6 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir,
     port: Number(env.PORT || 3000),
     host: env.HOST || '127.0.0.1',
+    timezone: configuredTimezone(env.TZ),
     googleClientId: google.clientId || env.GOOGLE_CLIENT_ID || '',
     googleClientSecret: google.clientSecret || env.GOOGLE_CLIENT_SECRET || '',
     googleRedirectUri: google.redirectUri || env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback'

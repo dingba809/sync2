@@ -302,7 +302,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       for (const wake of [...waiters]) wake();
     }, wait: async () => {
       while (!control.stopped) {
-        const inWindow = isWithinRunWindow(control.runWindowEnabled, control.runWindowStart, control.runWindowEnd);
+        const inWindow = isWithinRunWindow(control.runWindowEnabled, control.runWindowStart, control.runWindowEnd, new Date(), cfg.timezone);
         if (!control.paused && inWindow) {
           updateTask(db, taskId, { lastStatus: 'running' });
           return true;
@@ -312,7 +312,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
           const wake = () => { waiters.delete(wake); resolve(); };
           waiters.add(wake);
           if (!control.paused && control.runWindowEnabled && control.runWindowStart) {
-            setTimeout(wake, millisecondsUntilRunWindow(control.runWindowStart));
+            setTimeout(wake, millisecondsUntilRunWindow(control.runWindowStart, new Date(), cfg.timezone));
           }
         });
       }

@@ -5,7 +5,7 @@ export interface Scheduler {
   unregister(taskId: string): void;
 }
 
-export function createScheduler(): Scheduler {
+export function createScheduler(timezone = 'Asia/Shanghai'): Scheduler {
   const jobs = new Map<string, cron.ScheduledTask>();
 
   return {
@@ -21,7 +21,7 @@ export function createScheduler(): Scheduler {
         cronExpr = schedule;
       }
       if (!cron.validate(cronExpr)) return;
-      jobs.set(taskId, cron.schedule(cronExpr, fn));
+      jobs.set(taskId, cron.schedule(cronExpr, fn, { timezone }));
     },
     unregister(taskId) {
       const j = jobs.get(taskId);

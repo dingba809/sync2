@@ -17,9 +17,15 @@ describe('config', () => {
   });
 
   it('reads env overrides', () => {
-    const cfg = loadConfig({ DATA_DIR: tmp(), PORT: '8080', GOOGLE_CLIENT_ID: 'cid' } as any);
+    const cfg = loadConfig({ DATA_DIR: tmp(), PORT: '8080', TZ: 'America/New_York', GOOGLE_CLIENT_ID: 'cid' } as any);
     expect(cfg.port).toBe(8080);
+    expect(cfg.timezone).toBe('America/New_York');
     expect(cfg.googleClientId).toBe('cid');
+  });
+
+  it('uses China Standard Time when TZ is missing or invalid', () => {
+    expect(loadConfig({ DATA_DIR: tmp() } as any).timezone).toBe('Asia/Shanghai');
+    expect(loadConfig({ DATA_DIR: tmp(), TZ: 'not/a-timezone' } as any).timezone).toBe('Asia/Shanghai');
   });
 
   it('getMasterKey is stable across calls', () => {
