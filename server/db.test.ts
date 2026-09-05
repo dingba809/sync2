@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns, insertLog, listLogs, queueRemoteDelete, listPendingRemoteDeletes, completeRemoteDelete } from './db.js';
+import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns, insertLog, listLogs, queueRemoteDelete, listPendingRemoteDeletes, completeRemoteDelete, insertAuditRecords, listAuditRecords, pruneAuditRecords } from './db.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -84,6 +84,19 @@ describe('db', () => {
     expect(listPendingRemoteDeletes(db, tid)).toEqual([{ remoteId: 'old-id', relPath: 'f.txt' }]);
     completeRemoteDelete(db, tid, 'old-id');
     expect(listPendingRemoteDeletes(db, tid)).toEqual([]);
+  });
+
+  it('stores, pages, and prunes local audit records', () => {
+    const taskId = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
+    const targetId = insertTarget(db, { taskId, accountId: 'a', remotePath: '/r' });
+    const runId = insertRun(db, taskId, targetId);
+    insertAuditRecords(db, [
+      { runId, taskId, targetId, relPath: 'a.txt', action: 'metadata_skipped', detail: null },
+      { runId, taskId, targetId, relPath: 'b.txt', action: 'uploaded', detail: null }
+    ]);
+    expect(listAuditRecords(db, taskId, runId, 0, 1)).toHaveLength(1);
+    pruneAuditRecords(db, taskId, 90, 30);
+    expect(listAuditRecords(db, taskId, runId)).toHaveLength(2);
   });
 
   it('run history carries target id', () => {

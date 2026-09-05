@@ -104,10 +104,12 @@ describe('runSync', () => {
     const provider = fakeProvider(new Map());
     const listFolder = vi.spyOn(provider, 'listFolder');
 
-    const result = await runSync({ targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {} });
+    const audit: any[] = [];
+    const result = await runSync({ targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {}, onAudit: rows => audit.push(...rows) });
 
     expect(listFolder).not.toHaveBeenCalled();
     expect(result.uploadedCount).toBe(0);
+    expect(audit).toContainEqual(expect.objectContaining({ relPath: 'unchanged.txt', action: 'metadata_skipped' }));
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -126,6 +128,29 @@ describe('runSync', () => {
     expect(result.uploadedCount).toBe(0);
     expect(upload).not.toHaveBeenCalled();
     expect(snap.list().get('same.txt')).toMatchObject({ remoteId: 'remote-id' });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('retries only the selected failed upload paths', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-'));
+    writeFileSync(join(dir, 'failed.txt'), 'retry me');
+    writeFileSync(join(dir, 'already-ok.txt'), 'leave me');
+    const provider = fakeProvider(new Map());
+    const upload = vi.spyOn(provider, 'uploadFile');
+    const snap = snapshots();
+    const okPath = join(dir, 'already-ok.txt');
+    snap.upsert('t', 'already-ok.txt', {
+      size: 8, mtime: Math.floor(statSync(okPath).mtimeMs), contentMd5: null, contentSha1: null, remoteId: 'ok-id'
+    });
+
+    const result = await runSync({
+      targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {},
+      retryPaths: { uploadPaths: ['failed.txt'], deletePaths: [] }
+    });
+
+    expect(result.uploadedCount).toBe(1);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload.mock.calls[0][2]).toBe('failed.txt');
     rmSync(dir, { recursive: true, force: true });
   });
 });

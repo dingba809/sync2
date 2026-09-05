@@ -8,7 +8,7 @@ import {
   insertAccount, updateAccountCredential, listAccounts, deleteAccount,
   insertTask, updateTask, listTasks, deleteTask, getAccount, getTask,
   insertTarget, listTargets, deleteTarget,
-  insertRun, finishRun, listRuns, insertLog, listLogs, latestLogId, getSetting, setSetting,
+  insertRun, finishRun, listRuns, getRun, insertLog, listLogs, latestLogId, getSetting, setSetting, insertAuditRecords, listAuditRecords, listRetryAuditPaths, pruneAuditRecords,
   listSnapshots, upsertSnapshot, deleteSnapshot, queueRemoteDelete, listPendingRemoteDeletes, completeRemoteDelete
 } from './db.js';
 import { runSync } from './engine/executor.js';
@@ -139,6 +139,26 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
   app.get('/api/tasks/:id/runs', async (req) => {
     const { id } = req.params as any;
     return listRuns(db, id);
+  });
+
+  app.get('/api/tasks/:id/audit', async (req, reply) => {
+    const { id } = req.params as any;
+    const { runId, afterId, limit } = req.query as any;
+    if (!runId) return reply.code(400).send({ error: 'runId is required' });
+    return listAuditRecords(db, id, String(runId), Number(afterId) || 0, Number(limit) || 200);
+  });
+
+  app.post('/api/tasks/:id/runs/:runId/retry-failed', async (req, reply) => {
+    const { id: taskId, runId } = req.params as any;
+    if (running.has(taskId)) return reply.code(409).send({ error: '任务正在运行，无法重试' });
+    const sourceRun = getRun(db, taskId, runId);
+    if (!sourceRun) return reply.code(404).send({ error: '运行记录不存在' });
+    const retryPaths = listRetryAuditPaths(db, taskId, runId);
+    if (retryPaths.uploadPaths.length + retryPaths.deletePaths.length === 0) {
+      return reply.code(400).send({ error: '该运行没有可重试的失败文件' });
+    }
+    void runTaskById(taskId, new Map([[sourceRun.targetId, retryPaths]]));
+    return { ok: true, uploadCount: retryPaths.uploadPaths.length, deleteCount: retryPaths.deletePaths.length };
   });
 
   app.get('/api/filesystem/directories', async (req, reply) => {
@@ -294,7 +314,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
     scheduler.register(t.id, t.schedule, !!t.enabled, () => { void runTaskById(t.id); });
   }
 
-  async function runTaskById(taskId: string): Promise<void> {
+  async function runTaskById(taskId: string, retries?: Map<string, { uploadPaths: string[]; deletePaths: string[] }>): Promise<void> {
     if (running.has(taskId)) return;
     running.add(taskId);
     const waiters = new Set<() => void>();
@@ -325,7 +345,9 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
       control.runWindowEnabled = !!t.runWindowEnabled;
       control.runWindowStart = t.runWindowStart;
       control.runWindowEnd = t.runWindowEnd;
-      const targets = listTargets(db, taskId);
+      const targets = retries
+        ? listTargets(db, taskId).filter(target => retries.has(target.id))
+        : listTargets(db, taskId);
       if (targets.length === 0) {
         insertLog(db, taskId, 'error', '任务没有备份目标');
         updateTask(db, taskId, { lastStatus: 'failed' });
@@ -384,6 +406,7 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
             anyFailed = true;
             insertLog(db, taskId, 'error', `目标 ${tg.remotePath}: 容量已满`);
             finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: 'quota exceeded' });
+            pruneAuditRecords(db, taskId);
             publishProgress(taskId, progress);
             continue;
           }
@@ -413,12 +436,17 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
               tp.totalDelete = p.totalDelete;
               publishProgress(taskId, progress);
             },
+            runId,
+            taskId,
+            onAudit: (records) => insertAuditRecords(db, records),
+            retryPaths: retries?.get(tg.id),
             waitForResume: control.wait,
             uploadConcurrency: acc.provider === 'quark' ? syncConfig().quarkUploadConcurrency : 1
           });
           if (result.stopped) {
             tp.status = 'failed';
             finishRun(db, runId, { status: 'failed', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: 'stopped by user' });
+            pruneAuditRecords(db, taskId);
             publishProgress(taskId, progress);
             updateTask(db, taskId, { lastStatus: 'stopped' });
             return;
@@ -426,13 +454,17 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
           tp.status = result.error ? 'failed' : 'success';
           if (result.error) anyFailed = true;
           finishRun(db, runId, { status: result.error ? 'failed' : 'success', uploadedCount: result.uploadedCount, deletedCount: result.deletedCount, error: result.error });
+          pruneAuditRecords(db, taskId);
           publishProgress(taskId, progress);
         } catch (e) {
           const msg = (e as Error).message;
           tp.status = 'failed';
           anyFailed = true;
           insertLog(db, taskId, 'error', `目标 ${tg.remotePath} 同步异常: ${msg}`);
-          if (runId) finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
+          if (runId) {
+            finishRun(db, runId, { status: 'failed', uploadedCount: 0, deletedCount: 0, error: msg });
+            pruneAuditRecords(db, taskId);
+          }
           publishProgress(taskId, progress);
         }
       }

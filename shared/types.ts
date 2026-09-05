@@ -117,3 +117,18 @@ export interface LogRecord {
   message: string;
   createdAt: number;
 }
+
+export type AuditAction =
+  | 'metadata_skipped' | 'hash_skipped' | 'claimed' | 'uploaded' | 'replaced'
+  | 'deleted' | 'upload_failed' | 'delete_failed' | 'conflict' | 'cleanup_deleted' | 'cleanup_failed';
+
+export interface AuditRecord {
+  id: number;
+  runId: string;
+  taskId: string;
+  targetId: string;
+  relPath: string;
+  action: AuditAction;
+  detail: string | null;
+  createdAt: number;
+}

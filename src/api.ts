@@ -36,6 +36,7 @@ export const api = {
   resumeTask: (id: string) => fetch(`/api/tasks/${id}/resume`, { method: 'POST' }).then(r => j<any>(r)),
   stopTask: (id: string) => fetch(`/api/tasks/${id}/stop`, { method: 'POST' }).then(r => j<any>(r)),
   listRuns: (id: string) => fetch(`/api/tasks/${id}/runs`).then(r => j<any[]>(r)),
+  retryFailedRun: (taskId: string, runId: string) => fetch(`/api/tasks/${taskId}/runs/${runId}/retry-failed`, { method: 'POST' }).then(r => j<{ ok: true; uploadCount: number; deleteCount: number }>(r)),
   listDirectories: (path?: string) => fetch(`/api/filesystem/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`).then(r => j<{ path: string | null; parent: string | null; roots?: string[]; directories: { name: string; path: string }[] }>(r)),
   listAccounts: () => fetch('/api/accounts').then(r => j<any[]>(r)),
   deleteAccount: (id: string) => fetch(`/api/accounts/${id}`, { method: 'DELETE' }).then(r => j<any>(r)),
@@ -47,6 +48,7 @@ export const api = {
   quarkStart: () => fetch('/api/auth/quark/start').then(r => j<{ token: string; url: string }>(r)),
   quarkPoll: (token: string) => fetch(`/api/auth/quark/poll?token=${token}`).then(r => j<any>(r)),
   listLogs: (since: number, taskId?: string, from?: number, to?: number) => fetch(`/api/logs?since=${since}${taskId ? `&taskId=${taskId}` : ''}${from !== undefined ? `&from=${from}` : ''}${to !== undefined ? `&to=${to}` : ''}`).then(r => j<any[]>(r)),
+  listAudit: (taskId: string, runId: string, afterId = 0) => fetch(`/api/tasks/${taskId}/audit?runId=${encodeURIComponent(runId)}&afterId=${afterId}`).then(r => j<any[]>(r)),
   getProgress: (id: string) => fetch(`/api/tasks/${id}/progress`).then(r => j<TaskProgress | null>(r)),
   progressStreamUrl: (id: string) => `/api/tasks/${id}/progress/stream`
 };

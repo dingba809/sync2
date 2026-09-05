@@ -1,4 +1,4 @@
-import { RemoteFileNotFoundError, type DriveProvider, type FileDigests, type RemoteEntry } from '../../shared/types.js';
+import { RemoteFileNotFoundError, type AuditAction, type AuditRecord, type DriveProvider, type FileDigests, type RemoteEntry } from '../../shared/types.js';
 import { scanDirectory } from './scanner.js';
 import { planSync, type SnapshotEntry } from './planner.js';
 import { fileDigests } from './hashes.js';
@@ -28,19 +28,26 @@ interface RemoteInventory {
   directories: Set<string>;
 }
 
+export interface RetryPaths {
+  uploadPaths: string[];
+  deletePaths: string[];
+}
+
 export async function runSync(opts: {
-  targetId: string; localPath: string; remotePath: string; provider: DriveProvider; snapshots: SnapshotStore;
+  runId?: string; taskId?: string; targetId: string; localPath: string; remotePath: string; provider: DriveProvider; snapshots: SnapshotStore;
   onLog: (level: 'info' | 'error', msg: string) => void; onProgress?: (p: ProgressInfo) => void;
-  waitForResume?: () => Promise<boolean>; uploadConcurrency?: number;
+  onAudit?: (records: Omit<AuditRecord, 'id' | 'createdAt'>[]) => void; retryPaths?: RetryPaths; waitForResume?: () => Promise<boolean>; uploadConcurrency?: number;
 }): Promise<RunResult> {
-  const { targetId, localPath, remotePath, provider, snapshots, onLog, onProgress, waitForResume, uploadConcurrency = 1 } = opts;
+  const { runId: suppliedRunId, taskId: suppliedTaskId, targetId, localPath, remotePath, provider, snapshots, onLog, onProgress, onAudit, retryPaths, waitForResume, uploadConcurrency = 1 } = opts;
+  const runId = suppliedRunId ?? targetId;
+  const taskId = suppliedTaskId ?? targetId;
   if (!statSync(localPath).isDirectory()) throw new Error(`本地目录不存在或不是目录: ${localPath}`);
 
   const scanStartedAt = Date.now();
   const localFiles = scanDirectory(localPath);
   onLog('info', `本地扫描完成：${localFiles.size} 个文件，耗时 ${Date.now() - scanStartedAt}ms`);
   const snapshotMap = snapshots.list(targetId);
-  const isInitialSync = snapshotMap.size === 0;
+  const isInitialSync = snapshotMap.size === 0 && !retryPaths;
   const rootId = await resolveRemoteRoot(provider, remotePath);
   const remoteStartedAt = Date.now();
   const remoteInventory = isInitialSync ? await listRemoteRecursive(provider, rootId) : { files: new Map(), directories: new Set() };
@@ -48,9 +55,33 @@ export async function runSync(opts: {
     ? `首次安全核对远端完成：${[...remoteInventory.files.values()].flat().length} 个文件，耗时 ${Date.now() - remoteStartedAt}ms`
     : '使用本地快照增量同步，跳过远端完整核对');
 
-  const plan = planSync(localFiles, snapshotMap);
+  const defaultPlan = planSync(localFiles, snapshotMap);
+  const plan = retryPaths ? {
+    toProcess: [...new Set(retryPaths.uploadPaths)].filter(path => localFiles.has(path)),
+    toDelete: [...new Set(retryPaths.deletePaths)].flatMap(relPath => {
+      const snapshot = snapshotMap.get(relPath);
+      return snapshot ? [{ relPath, remoteId: snapshot.remoteId }] : [];
+    })
+  } : defaultPlan;
+  const auditBuffer: Omit<AuditRecord, 'id' | 'createdAt'>[] = [];
+  const audit = (relPath: string, action: AuditAction, detail: string | null = null) => {
+    auditBuffer.push({ runId, taskId, targetId, relPath, action, detail });
+    if (auditBuffer.length >= 100) flushAudit();
+  };
+  const flushAudit = () => {
+    if (auditBuffer.length === 0) return;
+    onAudit?.(auditBuffer.splice(0));
+  };
   const metadataSkipped = localFiles.size - plan.toProcess.length;
-  if (metadataSkipped > 0) onLog('info', `元数据跳过 ${metadataSkipped} 个未变化文件`);
+  if (!retryPaths) {
+    if (metadataSkipped > 0) onLog('info', `元数据跳过 ${metadataSkipped} 个未变化文件`);
+    for (const [relPath, local] of localFiles) {
+      const snapshot = snapshotMap.get(relPath);
+      if (snapshot && snapshot.size === local.size && snapshot.mtime === local.mtime) audit(relPath, 'metadata_skipped');
+    }
+  } else {
+    onLog('info', `仅重试失败文件：上传 ${plan.toProcess.length} 个，删除 ${plan.toDelete.length} 个`);
+  }
   let uploadedCount = 0;
   let failedUploadCount = 0;
   let deletedCount = 0;
@@ -83,9 +114,11 @@ export async function runSync(opts: {
       await withRetry(() => provider.deleteEntry(pending.remoteId));
       snapshots.completeRemoteDelete(targetId, pending.remoteId);
       onLog('info', `已清理旧远端文件：${pending.relPath}`);
+      audit(pending.relPath, 'cleanup_deleted');
     } catch (e) {
       error = (e as Error).message;
       onLog('error', `清理旧远端文件失败 ${pending.relPath}: ${error}`);
+      audit(pending.relPath, 'cleanup_failed', error);
     }
   }
 
@@ -136,33 +169,39 @@ export async function runSync(opts: {
         error = `远端文件与目录层级不兼容: ${relPath}`;
         failedUploadCount++;
         onLog('error', `冲突跳过 ${relPath}：${error}，请先手动处理`);
+        audit(relPath, 'conflict', error);
         return;
       }
       if (remoteMatches.length > 1) {
         error = `远端存在多个同路径文件: ${relPath}`;
         failedUploadCount++;
         onLog('error', `冲突跳过 ${relPath}：${error}，请先手动处理`);
+        audit(relPath, 'conflict', error);
         return;
       }
       const digests = await fileDigests(join(localPath, relPath));
       if (snapshot && snapshot.contentSha1 === digests.sha1) {
         writeSnapshot(relPath, local, digests, snapshot.remoteId);
         onLog('info', `哈希验证跳过 ${relPath}`);
+        audit(relPath, 'hash_skipped');
         return;
       }
       const existing = remoteMatches[0];
       if (!snapshot && existing && remoteHashMatches(existing, digests)) {
         writeSnapshot(relPath, local, digests, existing.id);
         onLog('info', `认领已有远端文件 ${relPath}`);
+        audit(relPath, 'claimed');
         return;
       }
       await replace(relPath, local, digests, snapshot?.remoteId ?? existing?.id);
       uploadedCount++;
       onLog('info', `${snapshot || existing ? '上传替换' : '上传'} ${relPath}`);
+      audit(relPath, snapshot || existing ? 'replaced' : 'uploaded');
     } catch (e) {
       error = (e as Error).message;
       failedUploadCount++;
       onLog('error', `上传失败 ${relPath}: ${error}`);
+      audit(relPath, 'upload_failed', error);
     } finally {
       activeUploadCount--;
       report();
@@ -179,7 +218,10 @@ export async function runSync(opts: {
     }
   });
   await Promise.all(workers);
-  if (stopped) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
+  if (stopped) {
+    flushAudit();
+    return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
+  }
 
   for (const del of plan.toDelete) {
     if (waitForResume && !await waitForResume()) return { uploadedCount, failedUploadCount, deletedCount, error, stopped: true };
@@ -189,12 +231,15 @@ export async function runSync(opts: {
       snapshots.remove(targetId, del.relPath);
       deletedCount++;
       onLog('info', `删除 ${del.relPath}`);
+      audit(del.relPath, 'deleted');
     } catch (e) {
       error = (e as Error).message;
       onLog('error', `删除失败 ${del.relPath}: ${error}`);
+      audit(del.relPath, 'delete_failed', error);
     }
     report();
   }
+  flushAudit();
   return { uploadedCount, failedUploadCount, deletedCount, error, stopped: false };
 }
 

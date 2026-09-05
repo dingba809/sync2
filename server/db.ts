@@ -49,6 +49,18 @@ export function migrate(db: Database.Database): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS audit_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      rel_path TEXT NOT NULL,
+      action TEXT NOT NULL,
+      detail TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS audit_records_run_id_id ON audit_records(run_id, id);
+    CREATE INDEX IF NOT EXISTS audit_records_task_created ON audit_records(task_id, created_at);
   `);
 
   if (!tableExists(db, 'tasks')) {
@@ -193,6 +205,7 @@ export function deleteAccount(db: Database.Database, id: string): void {
     for (const tid of targetIds) {
       db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(tid);
       db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(tid);
+      db.prepare(`DELETE FROM audit_records WHERE target_id = ?`).run(tid);
       db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(tid);
     }
     const taskIds = db.prepare(`SELECT DISTINCT task_id AS id FROM task_targets WHERE account_id = ?`).all(id)
@@ -282,6 +295,7 @@ export function deleteTargetsByTask(db: Database.Database, taskId: string): void
   for (const tid of ids) {
     db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(tid);
     db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(tid);
+    db.prepare(`DELETE FROM audit_records WHERE target_id = ?`).run(tid);
     db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(tid);
   }
   db.prepare(`DELETE FROM task_targets WHERE task_id = ?`).run(taskId);
@@ -290,6 +304,7 @@ export function deleteTargetsByTask(db: Database.Database, taskId: string): void
 export function deleteTarget(db: Database.Database, targetId: string): void {
   db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(targetId);
   db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(targetId);
+  db.prepare(`DELETE FROM audit_records WHERE target_id = ?`).run(targetId);
   db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(targetId);
   db.prepare(`DELETE FROM task_targets WHERE id = ?`).run(targetId);
 }
@@ -376,6 +391,12 @@ export function listRuns(db: Database.Database, taskId: string, limit = 20): Run
   ).all(taskId, limit) as any;
 }
 
+export function getRun(db: Database.Database, taskId: string, runId: string): RunRecord | undefined {
+  return db.prepare(`SELECT id, task_id AS taskId, target_id AS targetId, started_at AS startedAt, finished_at AS finishedAt,
+      status, uploaded_count AS uploadedCount, deleted_count AS deletedCount, error
+    FROM run_history WHERE task_id = ? AND id = ?`).get(taskId, runId) as RunRecord | undefined;
+}
+
 export function insertLog(
   db: Database.Database, taskId: string | null, level: 'info' | 'error', message: string
 ): void {
@@ -401,6 +422,40 @@ export function listLogs(
 export function latestLogId(db: Database.Database): number {
   const row = db.prepare(`SELECT MAX(id) AS id FROM logs`).get() as any;
   return row.id ?? 0;
+}
+
+export function insertAuditRecords(db: Database.Database, records: Omit<import('../shared/types.js').AuditRecord, 'id' | 'createdAt'>[]): void {
+  if (records.length === 0) return;
+  const insert = db.prepare(`INSERT INTO audit_records (run_id, task_id, target_id, rel_path, action, detail, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  db.transaction((rows: Omit<import('../shared/types.js').AuditRecord, 'id' | 'createdAt'>[]) => {
+    const now = Date.now();
+    for (const row of rows) insert.run(row.runId, row.taskId, row.targetId, row.relPath, row.action, row.detail, now);
+  })(records);
+}
+
+export function listAuditRecords(db: Database.Database, taskId: string, runId: string, afterId = 0, limit = 200): import('../shared/types.js').AuditRecord[] {
+  return db.prepare(`SELECT id, run_id AS runId, task_id AS taskId, target_id AS targetId, rel_path AS relPath,
+      action, detail, created_at AS createdAt
+    FROM audit_records WHERE task_id = ? AND run_id = ? AND id > ? ORDER BY id LIMIT ?`)
+    .all(taskId, runId, afterId, Math.max(1, Math.min(200, limit))) as import('../shared/types.js').AuditRecord[];
+}
+
+export function listRetryAuditPaths(db: Database.Database, taskId: string, runId: string): { uploadPaths: string[]; deletePaths: string[] } {
+  const rows = db.prepare(`SELECT DISTINCT rel_path AS relPath, action FROM audit_records
+    WHERE task_id = ? AND run_id = ? AND action IN ('upload_failed', 'delete_failed', 'failed')`).all(taskId, runId) as any[];
+  return {
+    uploadPaths: rows.filter(row => row.action === 'upload_failed' || row.action === 'failed').map(row => row.relPath),
+    deletePaths: rows.filter(row => row.action === 'delete_failed').map(row => row.relPath)
+  };
+}
+
+export function pruneAuditRecords(db: Database.Database, taskId: string, days = 90, maxRuns = 30): void {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  db.prepare(`DELETE FROM audit_records WHERE task_id = ? AND created_at < ?`).run(taskId, cutoff);
+  db.prepare(`DELETE FROM audit_records WHERE task_id = ? AND run_id IN (
+    SELECT id FROM run_history WHERE task_id = ? ORDER BY started_at DESC LIMIT -1 OFFSET ?
+  )`).run(taskId, taskId, maxRuns);
 }
 
 export function getSetting(db: Database.Database, key: string): string | undefined {
