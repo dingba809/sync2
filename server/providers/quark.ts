@@ -1,4 +1,4 @@
-import type { DriveProvider, RemoteEntry, Quota } from '../../shared/types.js';
+import type { DriveProvider, RemoteEntry, Quota, UploadOptions } from '../../shared/types.js';
 import { createHash } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';
 
@@ -77,7 +77,8 @@ export class QuarkProvider implements DriveProvider {
           isDir: !!f.dir,
           size: Number(f.size ?? 0),
           mtime: Number(f.updated_at ?? 0),
-          hash: f.sha1 || undefined
+          hash: f.sha1 || undefined,
+          hashAlgorithm: 'sha1'
         });
       }
       if (
@@ -98,11 +99,11 @@ export class QuarkProvider implements DriveProvider {
     return data.fid;
   }
 
-  async uploadFile(localPath: string, parentId: string, name: string): Promise<RemoteEntry> {
+  async uploadFile(localPath: string, parentId: string, name: string, options?: UploadOptions): Promise<RemoteEntry> {
     const size = statSync(localPath).size;
     const mimeType = 'application/octet-stream';
 
-    const { md5, sha1 } = await hashFile(localPath);
+    const { md5, sha1 } = options?.digests ?? await hashFile(localPath);
 
     const pre = await this.post(`${BASE}/file/upload/pre`, {
       // The executor streams parts one at a time. Declaring parallel upload
@@ -117,7 +118,7 @@ export class QuarkProvider implements DriveProvider {
       task_id: pre.task_id, md5, sha1
     });
     if (hashRes?.finish === true) {
-      const entry = this.entryFromUploadResponse(hashRes, name, size, md5);
+      const entry = this.entryFromUploadResponse(hashRes, name, size, sha1);
       if (entry) return entry;
       return await this.findByName(parentId, name);
     }
@@ -135,7 +136,7 @@ export class QuarkProvider implements DriveProvider {
 
     await this.upCommit(pre, etags, baseUrl);
     const finish = await this.post(`${BASE}/file/upload/finish`, { task_id: pre.task_id, obj_key: pre.obj_key });
-    const entry = this.entryFromUploadResponse(finish, name, size, md5);
+    const entry = this.entryFromUploadResponse(finish, name, size, sha1);
     if (entry) return entry;
 
     return await this.findByName(parentId, name);
@@ -144,7 +145,7 @@ export class QuarkProvider implements DriveProvider {
   private entryFromUploadResponse(data: any, name: string, size: number, hash: string): RemoteEntry | undefined {
     const id = data?.fid ?? data?.file_id ?? data?.fileId ?? data?.file?.fid ?? data?.file?.id;
     if (!id) return undefined;
-    return { id: String(id), name, isDir: false, size, mtime: Date.now(), hash };
+    return { id: String(id), name, isDir: false, size, mtime: Date.now(), hash, hashAlgorithm: 'sha1' };
   }
 
   private async findByName(parentId: string, name: string): Promise<RemoteEntry> {

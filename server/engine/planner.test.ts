@@ -1,80 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { planSync, LocalFileInfo, SnapshotEntry, RemoteRef } from './planner.js';
+import { planSync, type LocalFileInfo, type SnapshotEntry } from './planner.js';
 
-const lf = (size: number, mtime: number): LocalFileInfo => ({ size, mtime });
-const snap = (size: number, mtime: number, hash: string | null, remoteId: string): SnapshotEntry =>
-  ({ size, mtime, hash, remoteId });
-const remote = (size: number, hash?: string, id = 'rid'): RemoteRef => ({ id, size, hash });
+const local = (size: number, mtime: number): LocalFileInfo => ({ size, mtime });
+const snapshot = (size: number, mtime: number, remoteId = 'rid'): SnapshotEntry =>
+  ({ size, mtime, contentMd5: 'md5', contentSha1: 'sha1', remoteId });
 
 describe('planSync', () => {
-  it('uploads new local file (no snapshot, no remote)', () => {
-    const p = planSync(new Map([['a.txt', lf(1, 1)]]), new Map(), new Map());
-    expect(p.toUpload).toEqual(['a.txt']);
-    expect(p.toDelete).toEqual([]);
+  it('does not process unchanged snapshot files', () => {
+    const plan = planSync(new Map([['a.txt', local(5, 1)]]), new Map([['a.txt', snapshot(5, 1)]]));
+    expect(plan.toProcess).toEqual([]);
   });
 
-  it('uploads changed file (size differs)', () => {
-    const p = planSync(
-      new Map([['a.txt', lf(10, 1)]]),
-      new Map([['a.txt', snap(5, 1, 'h', 'rid')]]),
-      new Map([['a.txt', remote(5, 'h')]])
+  it('processes new and metadata-changed local files', () => {
+    const plan = planSync(
+      new Map([['new.txt', local(1, 1)], ['changed.txt', local(5, 2)]]),
+      new Map([['changed.txt', snapshot(5, 1)]])
     );
-    expect(p.toUpload).toEqual(['a.txt']);
-    expect(p.toDelete).toEqual([]);
+    expect(plan.toProcess).toEqual(['new.txt', 'changed.txt']);
   });
 
-  it('uploads changed file (mtime differs)', () => {
-    const p = planSync(
-      new Map([['a.txt', lf(5, 2)]]),
-      new Map([['a.txt', snap(5, 1, 'h', 'rid')]]),
-      new Map([['a.txt', remote(5, 'h')]])
-    );
-    expect(p.toUpload).toEqual(['a.txt']);
-  });
-
-  it('skips unchanged file present remotely', () => {
-    const p = planSync(
-      new Map([['a.txt', lf(5, 1)]]),
-      new Map([['a.txt', snap(5, 1, 'h', 'rid')]]),
-      new Map([['a.txt', remote(5, 'h')]])
-    );
-    expect(p.toUpload).toEqual([]);
-    expect(p.toDelete).toEqual([]);
-  });
-
-  it('re-uploads unchanged file if remote was deleted', () => {
-    const p = planSync(
-      new Map([['a.txt', lf(5, 1)]]),
-      new Map([['a.txt', snap(5, 1, 'h', 'rid')]]),
-      new Map()
-    );
-    expect(p.toUpload).toEqual(['a.txt']);
-  });
-
-  it('deletes remote when local file removed (has snapshot)', () => {
-    const p = planSync(
-      new Map(),
-      new Map([['a.txt', snap(5, 1, 'h', 'rid')]]),
-      new Map([['a.txt', remote(5, 'h')]])
-    );
-    expect(p.toDelete).toEqual([{ relPath: 'a.txt', remoteId: 'rid' }]);
-  });
-
-  it('deletes remote when local file removed (no snapshot, remote exists)', () => {
-    const p = planSync(
-      new Map(),
-      new Map(),
-      new Map([['a.txt', remote(5, 'h', 'remote-id')]])
-    );
-    expect(p.toDelete).toEqual([{ relPath: 'a.txt', remoteId: 'remote-id' }]);
-  });
-
-  it('uploads local file that exists remotely but has no snapshot (conservative)', () => {
-    const p = planSync(
-      new Map([['a.txt', lf(5, 1)]]),
-      new Map(),
-      new Map([['a.txt', remote(5, 'h')]])
-    );
-    expect(p.toUpload).toEqual(['a.txt']);
+  it('deletes only files managed by the snapshot', () => {
+    const plan = planSync(new Map(), new Map([['old.txt', snapshot(1, 1, 'old-id')]]));
+    expect(plan.toDelete).toEqual([{ relPath: 'old.txt', remoteId: 'old-id' }]);
   });
 });

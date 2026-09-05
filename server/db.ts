@@ -88,7 +88,17 @@ export function migrate(db: Database.Database): void {
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (target_id, rel_path)
     );
+    CREATE TABLE IF NOT EXISTS pending_remote_deletes (
+      target_id TEXT NOT NULL,
+      remote_id TEXT NOT NULL,
+      rel_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (target_id, remote_id)
+    );
   `);
+  const snapshotColumns = columns(db, 'file_snapshots');
+  if (!snapshotColumns.includes('content_md5')) db.exec(`ALTER TABLE file_snapshots ADD COLUMN content_md5 TEXT`);
+  if (!snapshotColumns.includes('content_sha1')) db.exec(`ALTER TABLE file_snapshots ADD COLUMN content_sha1 TEXT`);
 
   if (tableExists(db, 'run_history') && !columns(db, 'run_history').includes('target_id')) {
     db.exec(`DROP TABLE run_history`);
@@ -182,6 +192,7 @@ export function deleteAccount(db: Database.Database, id: string): void {
       .map((r: any) => r.id) as string[];
     for (const tid of targetIds) {
       db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(tid);
+      db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(tid);
       db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(tid);
     }
     const taskIds = db.prepare(`SELECT DISTINCT task_id AS id FROM task_targets WHERE account_id = ?`).all(id)
@@ -270,6 +281,7 @@ export function deleteTargetsByTask(db: Database.Database, taskId: string): void
     .map((r: any) => r.id) as string[];
   for (const tid of ids) {
     db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(tid);
+    db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(tid);
     db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(tid);
   }
   db.prepare(`DELETE FROM task_targets WHERE task_id = ?`).run(taskId);
@@ -277,6 +289,7 @@ export function deleteTargetsByTask(db: Database.Database, taskId: string): void
 
 export function deleteTarget(db: Database.Database, targetId: string): void {
   db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(targetId);
+  db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(targetId);
   db.prepare(`DELETE FROM run_history WHERE target_id = ?`).run(targetId);
   db.prepare(`DELETE FROM task_targets WHERE id = ?`).run(targetId);
 }
@@ -293,25 +306,25 @@ export function deleteTask(db: Database.Database, id: string): void {
 export function upsertSnapshot(
   db: Database.Database,
   targetId: string, relPath: string,
-  s: { size: number; mtime: number; hash: string | null; remoteId: string }
+  s: { size: number; mtime: number; contentMd5: string | null; contentSha1: string | null; remoteId: string }
 ): void {
   db.prepare(
-    `INSERT INTO file_snapshots (target_id, rel_path, size, mtime, hash, remote_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO file_snapshots (target_id, rel_path, size, mtime, content_md5, content_sha1, remote_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(target_id, rel_path) DO UPDATE SET
-       size = excluded.size, mtime = excluded.mtime, hash = excluded.hash,
+       size = excluded.size, mtime = excluded.mtime, content_md5 = excluded.content_md5, content_sha1 = excluded.content_sha1,
        remote_id = excluded.remote_id, updated_at = excluded.updated_at`
-  ).run(targetId, relPath, s.size, s.mtime, s.hash, s.remoteId, Date.now());
+  ).run(targetId, relPath, s.size, s.mtime, s.contentMd5, s.contentSha1, s.remoteId, Date.now());
 }
 
 export function listSnapshots(db: Database.Database, targetId: string):
-  Map<string, { size: number; mtime: number; hash: string | null; remoteId: string }> {
+  Map<string, { size: number; mtime: number; contentMd5: string | null; contentSha1: string | null; remoteId: string }> {
   const rows = db.prepare(
-    `SELECT rel_path AS relPath, size, mtime, hash, remote_id AS remoteId
+    `SELECT rel_path AS relPath, size, mtime, content_md5 AS contentMd5, content_sha1 AS contentSha1, remote_id AS remoteId
      FROM file_snapshots WHERE target_id = ?`
   ).all(targetId) as any[];
   const map = new Map();
-  for (const r of rows) map.set(r.relPath, { size: r.size, mtime: r.mtime, hash: r.hash, remoteId: r.remoteId });
+  for (const r of rows) map.set(r.relPath, { size: r.size, mtime: r.mtime, contentMd5: r.contentMd5, contentSha1: r.contentSha1, remoteId: r.remoteId });
   return map;
 }
 
@@ -321,6 +334,21 @@ export function deleteSnapshot(db: Database.Database, targetId: string, relPath:
 
 export function clearSnapshots(db: Database.Database, targetId: string): void {
   db.prepare(`DELETE FROM file_snapshots WHERE target_id = ?`).run(targetId);
+  db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ?`).run(targetId);
+}
+
+export function queueRemoteDelete(db: Database.Database, targetId: string, remoteId: string, relPath: string): void {
+  db.prepare(`INSERT INTO pending_remote_deletes (target_id, remote_id, rel_path, created_at)
+    VALUES (?, ?, ?, ?) ON CONFLICT(target_id, remote_id) DO NOTHING`).run(targetId, remoteId, relPath, Date.now());
+}
+
+export function listPendingRemoteDeletes(db: Database.Database, targetId: string): { remoteId: string; relPath: string }[] {
+  return db.prepare(`SELECT remote_id AS remoteId, rel_path AS relPath FROM pending_remote_deletes WHERE target_id = ? ORDER BY created_at`)
+    .all(targetId) as { remoteId: string; relPath: string }[];
+}
+
+export function completeRemoteDelete(db: Database.Database, targetId: string, remoteId: string): void {
+  db.prepare(`DELETE FROM pending_remote_deletes WHERE target_id = ? AND remote_id = ?`).run(targetId, remoteId);
 }
 
 export function insertRun(db: Database.Database, taskId: string, targetId: string): string {

@@ -24,10 +24,14 @@ function fakeProvider(remote: Map<string, RemoteEntry>): DriveProvider {
 
 function snapshots() {
   const map = new Map<string, any>();
+  const pending = new Map<string, { remoteId: string; relPath: string }>();
   return {
     list: () => map,
     upsert: (_t: string, rel: string, s: any) => map.set(rel, s),
-    remove: (_t: string, rel: string) => { map.delete(rel); }
+    remove: (_t: string, rel: string) => { map.delete(rel); },
+    queueRemoteDelete: (_t: string, remoteId: string, relPath: string) => pending.set(remoteId, { remoteId, relPath }),
+    listPendingRemoteDeletes: () => [...pending.values()],
+    completeRemoteDelete: (_t: string, remoteId: string) => { pending.delete(remoteId); }
   };
 }
 
@@ -39,7 +43,7 @@ describe('runSync', () => {
       ['old.txt', { id: 'old-id', name: 'old.txt', isDir: false, size: 4, mtime: 1 }]
     ]);
     const snap = snapshots();
-    snap.upsert('t', 'old.txt', { size: 4, mtime: 1, hash: null, remoteId: 'old-id' });
+    snap.upsert('t', 'old.txt', { size: 4, mtime: 1, contentMd5: null, contentSha1: null, remoteId: 'old-id' });
 
     const result = await runSync({
       targetId: 't', localPath: dir, remotePath: '/r',
@@ -96,13 +100,32 @@ describe('runSync', () => {
     const dir = mkdtempSync(join(tmpdir(), 'exec-'));
     writeFileSync(join(dir, 'unchanged.txt'), 'hello');
     const snap = snapshots();
-    snap.upsert('t', 'unchanged.txt', { size: 5, mtime: Math.floor(statSync(join(dir, 'unchanged.txt')).mtimeMs), hash: null, remoteId: 'id' });
+    snap.upsert('t', 'unchanged.txt', { size: 5, mtime: Math.floor(statSync(join(dir, 'unchanged.txt')).mtimeMs), contentMd5: null, contentSha1: null, remoteId: 'id' });
     const provider = fakeProvider(new Map());
     const listFolder = vi.spyOn(provider, 'listFolder');
 
-    await runSync({ targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {} });
+    const result = await runSync({ targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {} });
 
     expect(listFolder).not.toHaveBeenCalled();
+    expect(result.uploadedCount).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('claims same-content remote files during the first safe merge', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec-'));
+    writeFileSync(join(dir, 'same.txt'), 'hello');
+    const remote = new Map<string, RemoteEntry>([
+      ['same.txt', { id: 'remote-id', name: 'same.txt', isDir: false, size: 5, mtime: 1, hash: 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d', hashAlgorithm: 'sha1' }]
+    ]);
+    const provider = fakeProvider(remote);
+    const upload = vi.spyOn(provider, 'uploadFile');
+    const snap = snapshots();
+
+    const result = await runSync({ targetId: 't', localPath: dir, remotePath: '/r', provider, snapshots: snap, onLog: () => {} });
+
+    expect(result.uploadedCount).toBe(0);
+    expect(upload).not.toHaveBeenCalled();
+    expect(snap.list().get('same.txt')).toMatchObject({ remoteId: 'remote-id' });
     rmSync(dir, { recursive: true, force: true });
   });
 });

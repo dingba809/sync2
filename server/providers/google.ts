@@ -1,5 +1,4 @@
-import type { DriveProvider, RemoteEntry, Quota } from '../../shared/types.js';
-import { createHash } from 'node:crypto';
+import { RemoteFileNotFoundError, type DriveProvider, type RemoteEntry, type Quota, type UploadOptions } from '../../shared/types.js';
 import { createReadStream, statSync } from 'node:fs';
 
 const API = 'https://www.googleapis.com';
@@ -35,7 +34,8 @@ export class GoogleDriveProvider implements DriveProvider {
           isDir: f.mimeType === 'application/vnd.google-apps.folder',
           size: Number(f.size ?? 0),
           mtime: Math.floor(new Date(f.modifiedTime).getTime() / 1000),
-          hash: f.md5Checksum
+          hash: f.md5Checksum,
+          hashAlgorithm: 'md5'
         });
       }
       pageToken = data.nextPageToken;
@@ -66,41 +66,47 @@ export class GoogleDriveProvider implements DriveProvider {
     return data.id;
   }
 
-  async uploadFile(localPath: string, parentId: string, name: string): Promise<RemoteEntry> {
+  async uploadFile(localPath: string, parentId: string, name: string, _options?: UploadOptions): Promise<RemoteEntry> {
+    return this.resumableUpload(localPath, name, { name, parents: [parentId] });
+  }
+
+  async replaceFile(fileId: string, localPath: string, name: string, _options?: UploadOptions): Promise<RemoteEntry> {
+    return this.resumableUpload(localPath, name, { name }, fileId);
+  }
+
+  private async resumableUpload(localPath: string, name: string, metadata: object, fileId?: string): Promise<RemoteEntry> {
     const size = statSync(localPath).size;
-    const md5 = await md5File(localPath);
-
-    const existing = await this.listAll(parentId);
-    const dup = existing.find(e => !e.isDir && e.name === name && e.hash === md5);
-    if (dup) return dup;
-
     const headers = await this.headers();
-    const metadata = JSON.stringify({ name, parents: [parentId] });
+    const method = fileId ? 'PATCH' : 'POST';
+    const resource = fileId ? `/files/${encodeURIComponent(fileId)}` : '/files';
+    const metadataBody = JSON.stringify(metadata);
 
     if (size === 0) {
-      const res = await fetch(`${API}/drive/v3/files?fields=id,name,size,modifiedTime,md5Checksum`, {
-        method: 'POST',
+      const res = await fetch(`${API}/drive/v3${resource}?fields=id,name,size,modifiedTime,md5Checksum`, {
+        method,
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: metadata
+        body: metadataBody
       });
+      if (res.status === 404 && fileId) throw new RemoteFileNotFoundError(fileId);
       if (!res.ok) throw new Error(`Google create failed: ${res.status} ${await res.text()}`);
       const meta = await res.json() as any;
       return {
         id: meta.id, name: meta.name, isDir: false, size: 0,
-        mtime: Math.floor(new Date(meta.modifiedTime).getTime() / 1000), hash: meta.md5Checksum
+        mtime: Math.floor(new Date(meta.modifiedTime).getTime() / 1000), hash: meta.md5Checksum, hashAlgorithm: 'md5'
       };
     }
 
-    const initRes = await fetch(`${API}/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,modifiedTime,md5Checksum`, {
-      method: 'POST',
+    const initRes = await fetch(`${API}/upload/drive/v3${resource}?uploadType=resumable&fields=id,name,size,modifiedTime,md5Checksum`, {
+      method,
       headers: {
         ...headers,
         'Content-Type': 'application/json',
         'X-Upload-Content-Type': 'application/octet-stream',
         'X-Upload-Content-Length': String(size)
       },
-      body: metadata
+      body: metadataBody
     });
+    if (initRes.status === 404 && fileId) throw new RemoteFileNotFoundError(fileId);
     if (initRes.status !== 200) throw new Error(`Google resumable init failed: ${initRes.status} ${await initRes.text()}`);
     const sessionUri = initRes.headers.get('location');
     if (!sessionUri) throw new Error('Google resumable init missing location');
@@ -138,7 +144,8 @@ export class GoogleDriveProvider implements DriveProvider {
       isDir: false,
       size: Number(fileMeta.size ?? size),
       mtime: Math.floor(new Date(fileMeta.modifiedTime).getTime() / 1000),
-      hash: fileMeta.md5Checksum
+      hash: fileMeta.md5Checksum,
+      hashAlgorithm: 'md5'
     };
   }
 
@@ -157,11 +164,4 @@ export class GoogleDriveProvider implements DriveProvider {
     const data = await res.json() as any;
     return { total: Number(data.storageQuota.limit ?? 0), used: Number(data.storageQuota.usage ?? 0) };
   }
-}
-
-export async function md5File(path: string): Promise<string> {
-  const hash = createHash('md5');
-  const stream = createReadStream(path);
-  for await (const chunk of stream) hash.update(chunk as Buffer);
-  return hash.digest('hex');
 }

@@ -9,7 +9,7 @@ import {
   insertTask, updateTask, listTasks, deleteTask, getAccount, getTask,
   insertTarget, listTargets, deleteTarget,
   insertRun, finishRun, listRuns, insertLog, listLogs, latestLogId, getSetting, setSetting,
-  listSnapshots, upsertSnapshot, deleteSnapshot
+  listSnapshots, upsertSnapshot, deleteSnapshot, queueRemoteDelete, listPendingRemoteDeletes, completeRemoteDelete
 } from './db.js';
 import { runSync } from './engine/executor.js';
 import { createProvider } from './provider-factory.js';
@@ -390,7 +390,10 @@ export function registerRoutes(app: FastifyInstance, db: Database.Database, cfg:
           const snapshots = {
             list: (tid: string) => listSnapshots(db, tid),
             upsert: (tid: string, rel: string, s: any) => upsertSnapshot(db, tid, rel, s),
-            remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel)
+            remove: (tid: string, rel: string) => deleteSnapshot(db, tid, rel),
+            queueRemoteDelete: (tid: string, remoteId: string, rel: string) => queueRemoteDelete(db, tid, remoteId, rel),
+            listPendingRemoteDeletes: (tid: string) => listPendingRemoteDeletes(db, tid),
+            completeRemoteDelete: (tid: string, remoteId: string) => completeRemoteDelete(db, tid, remoteId)
           };
           const result = await runSync({
             targetId: tg.id,

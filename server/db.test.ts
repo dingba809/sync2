@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns, insertLog, listLogs } from './db.js';
+import { openDb, insertTask, getTask, listTasks, deleteTask, upsertSnapshot, listSnapshots, insertAccount, getAccount, insertTarget, listTargets, insertRun, finishRun, listRuns, insertLog, listLogs, queueRemoteDelete, listPendingRemoteDeletes, completeRemoteDelete } from './db.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,7 +39,7 @@ describe('db', () => {
   it('deletes task cascades snapshots', () => {
     const id = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
     const tid = insertTarget(db, { taskId: id, accountId: 'a', remotePath: '/r' });
-    upsertSnapshot(db, tid, 'f.txt', { size: 1, mtime: 2, hash: null, remoteId: 'rid' });
+    upsertSnapshot(db, tid, 'f.txt', { size: 1, mtime: 2, contentMd5: null, contentSha1: null, remoteId: 'rid' });
     expect(listSnapshots(db, tid).size).toBe(1);
     deleteTask(db, id);
     expect(listSnapshots(db, tid).size).toBe(0);
@@ -48,10 +48,10 @@ describe('db', () => {
   it('upserts snapshot (overwrite on conflict)', () => {
     const id = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
     const tid = insertTarget(db, { taskId: id, accountId: 'a', remotePath: '/r' });
-    upsertSnapshot(db, tid, 'f.txt', { size: 1, mtime: 2, hash: null, remoteId: 'r1' });
-    upsertSnapshot(db, tid, 'f.txt', { size: 3, mtime: 4, hash: 'abc', remoteId: 'r2' });
+    upsertSnapshot(db, tid, 'f.txt', { size: 1, mtime: 2, contentMd5: null, contentSha1: null, remoteId: 'r1' });
+    upsertSnapshot(db, tid, 'f.txt', { size: 3, mtime: 4, contentMd5: 'abc', contentSha1: 'def', remoteId: 'r2' });
     const m = listSnapshots(db, tid);
-    expect(m.get('f.txt')).toEqual({ size: 3, mtime: 4, hash: 'abc', remoteId: 'r2' });
+    expect(m.get('f.txt')).toEqual({ size: 3, mtime: 4, contentMd5: 'abc', contentSha1: 'def', remoteId: 'r2' });
   });
 
   it('stores and reads account', () => {
@@ -73,8 +73,17 @@ describe('db', () => {
   it('snapshots keyed by target', () => {
     const id = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
     const tid = insertTarget(db, { taskId: id, accountId: 'a', remotePath: '/r' });
-    upsertSnapshot(db, tid, 'f.txt', { size: 1, mtime: 2, hash: null, remoteId: 'rid' });
+    upsertSnapshot(db, tid, 'f.txt', { size: 1, mtime: 2, contentMd5: null, contentSha1: null, remoteId: 'rid' });
     expect(listSnapshots(db, tid).has('f.txt')).toBe(true);
+  });
+
+  it('persists pending remote cleanup until it succeeds', () => {
+    const id = insertTask(db, { name: 't', localPath: '/l', schedule: null, enabled: true });
+    const tid = insertTarget(db, { taskId: id, accountId: 'a', remotePath: '/r' });
+    queueRemoteDelete(db, tid, 'old-id', 'f.txt');
+    expect(listPendingRemoteDeletes(db, tid)).toEqual([{ remoteId: 'old-id', relPath: 'f.txt' }]);
+    completeRemoteDelete(db, tid, 'old-id');
+    expect(listPendingRemoteDeletes(db, tid)).toEqual([]);
   });
 
   it('run history carries target id', () => {

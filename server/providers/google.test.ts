@@ -47,7 +47,6 @@ describe('GoogleDriveProvider', () => {
     const filePath = join(dir, 'a.txt');
     writeFileSync(filePath, 'hello');
     vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(JSON.stringify({ files: [] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 200, headers: { location: 'https://example.com/session' } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         id: 'nid', name: 'a.txt', size: '5', modifiedTime: '2024-01-01T00:00:00.000Z', md5Checksum: 'abc'
@@ -58,6 +57,22 @@ describe('GoogleDriveProvider', () => {
     expect(entry.hash).toBe('abc');
     expect(entry.isDir).toBe(false);
     expect(entry.mtime).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('updates an existing file by id', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gup-'));
+    const filePath = join(dir, 'a.txt');
+    writeFileSync(filePath, 'hello');
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 200, headers: { location: 'https://example.com/session' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'existing', name: 'a.txt', size: '5', modifiedTime: '2024-01-01T00:00:00.000Z', md5Checksum: 'abc'
+      }), { status: 200 }));
+    const p = new GoogleDriveProvider(mockAuth());
+    await p.replaceFile('existing', filePath, 'a.txt');
+    expect(fetchMock.mock.calls[0][0]).toContain('/files/existing?uploadType=resumable');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PATCH' });
     rmSync(dir, { recursive: true, force: true });
   });
 });

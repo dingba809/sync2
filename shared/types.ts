@@ -7,6 +7,23 @@ export interface RemoteEntry {
   size: number;
   mtime: number;
   hash?: string;
+  hashAlgorithm?: 'md5' | 'sha1';
+}
+
+export interface FileDigests {
+  md5: string;
+  sha1: string;
+}
+
+export interface UploadOptions {
+  digests?: FileDigests;
+}
+
+export class RemoteFileNotFoundError extends Error {
+  constructor(fileId: string) {
+    super(`Remote file not found: ${fileId}`);
+    this.name = 'RemoteFileNotFoundError';
+  }
 }
 
 export interface Quota {
@@ -18,7 +35,8 @@ export interface DriveProvider {
   readonly rootId: string;
   listFolder(folderId: string): Promise<RemoteEntry[]>;
   ensureFolder(parentId: string, name: string): Promise<string>;
-  uploadFile(localPath: string, parentId: string, name: string): Promise<RemoteEntry>;
+  uploadFile(localPath: string, parentId: string, name: string, options?: UploadOptions): Promise<RemoteEntry>;
+  replaceFile?(fileId: string, localPath: string, name: string, options?: UploadOptions): Promise<RemoteEntry>;
   deleteEntry(id: string): Promise<void>;
   getQuota(): Promise<Quota>;
 }
